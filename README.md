@@ -51,9 +51,10 @@ bot_admin_ids = 允许审核的 QQ 号列表
 /key 配置 url https://newapi.qianye.host/
 /key 配置 管理员 添加 <QQ>
 /key 配置 查看
+/key 配置 刷新
 ```
 
-如果 `bot_admin_ids` 还没有配置，插件允许第一个私聊执行 `/key 配置 ...` 的人完成初始化。配置会保存到插件数据文件 `newapi_key_distributor.json` 的 `runtime_config` 中，并覆盖面板里的同名配置。
+如果 `bot_admin_ids` 还没有配置，插件允许第一个私聊执行 `/key 配置 ...` 的人完成初始化。聊天命令会直接写入 AstrBot 插件配置，和面板里的同名配置使用同一份数据。面板改完后可执行 `/key 配置 刷新` 让插件重新读取当前配置；旧版本的 `runtime_config` 会在启动时自动迁移到插件配置。
 
 常用策略：
 

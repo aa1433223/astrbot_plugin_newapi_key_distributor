@@ -441,6 +441,10 @@ class KeyStore:
             config[key] = value
         self.save()
 
+    def clear_runtime_config(self) -> None:
+        self.data["runtime_config"] = {}
+        self.save()
+
 
 class NewAPIKeyDistributorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -449,7 +453,8 @@ class NewAPIKeyDistributorPlugin(Star):
         self.config = config
         self.data_dir = StarTools.get_data_dir()
         self.store = KeyStore(self.data_dir / "newapi_key_distributor.json")
-        self.settings = self._apply_runtime_config(self._load_settings(config))
+        self._migrate_runtime_config_to_plugin_config()
+        self.settings = self._load_settings(config)
         self.client = self._build_client()
 
     async def initialize(self):
@@ -528,17 +533,65 @@ class NewAPIKeyDistributorPlugin(Star):
             ),
         )
 
-    def _apply_runtime_config(self, settings: PluginSettings) -> PluginSettings:
+    def _save_plugin_config(self) -> None:
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+
+    def _set_plugin_config(self, key: str, value: Any) -> None:
+        try:
+            self.config[key] = value
+        except TypeError:
+            setattr(self.config, key, value)
+        self._save_plugin_config()
+
+    def _remove_plugin_config(self, key: str) -> None:
+        removed = False
+        pop = getattr(self.config, "pop", None)
+        if callable(pop):
+            try:
+                pop(key, None)
+                removed = True
+            except TypeError:
+                try:
+                    pop(key)
+                    removed = True
+                except Exception:
+                    removed = False
+        if not removed and hasattr(self.config, key):
+            try:
+                delattr(self.config, key)
+                removed = True
+            except Exception:
+                removed = False
+        if removed:
+            self._save_plugin_config()
+
+    def _migrate_runtime_config_to_plugin_config(self) -> None:
         runtime = self.store.runtime_config()
-        if "newapi_base_url" in runtime:
-            settings.newapi_base_url = str(runtime.get("newapi_base_url") or "").strip()
-        if "admin_access_token" in runtime:
-            settings.admin_access_token = str(runtime.get("admin_access_token") or "").strip()
-        if "admin_user_id" in runtime:
-            settings.admin_user_id = _as_int(runtime.get("admin_user_id"), settings.admin_user_id)
-        if "bot_admin_ids" in runtime:
-            settings.bot_admin_ids = set(_as_list(runtime.get("bot_admin_ids")))
-        return settings
+        if not runtime:
+            return
+
+        migrated = False
+        for key in (
+            "newapi_base_url",
+            "admin_access_token",
+            "admin_user_id",
+            "bot_admin_ids",
+        ):
+            if key not in runtime:
+                continue
+            try:
+                self.config[key] = runtime[key]
+                migrated = True
+            except TypeError:
+                setattr(self.config, key, runtime[key])
+                migrated = True
+
+        if migrated:
+            self._save_plugin_config()
+            logger.info("[NewAPIKey] 已将旧运行时配置迁移到 AstrBot 插件配置")
+        self.store.clear_runtime_config()
 
     def _build_client(self) -> NewAPIClient:
         return NewAPIClient(
@@ -549,7 +602,7 @@ class NewAPIKeyDistributorPlugin(Star):
         )
 
     def _refresh_runtime_settings(self) -> None:
-        self.settings = self._apply_runtime_config(self._load_settings(self.config))
+        self.settings = self._load_settings(self.config)
         self.client = self._build_client()
 
     def _sender_id(self, event: AstrMessageEvent) -> str:
@@ -903,6 +956,9 @@ class NewAPIKeyDistributorPlugin(Star):
 
         if not rest or rest in {"查看", "list", "show"}:
             return self._runtime_config_summary()
+        if rest in {"刷新", "重载", "reload", "refresh"}:
+            self._refresh_runtime_settings()
+            return "已重新读取 AstrBot 插件配置。"
 
         key, _, value = rest.partition(" ")
         key = key.strip().lower()
@@ -917,13 +973,14 @@ class NewAPIKeyDistributorPlugin(Star):
                 "/key 配置 url <NewAPI地址>\n"
                 "/key 配置 管理员 添加 <QQ>\n"
                 "/key 配置 管理员 删除 <QQ>\n"
+                "/key 配置 刷新\n"
                 "/key 配置 清除 token|user|url|管理员"
             )
 
         if key in {"token", "access", "access_token"}:
             if not value:
                 return "用法：/key 配置 token <Access Token>"
-            self.store.set_runtime_config("admin_access_token", value)
+            self._set_plugin_config("admin_access_token", value)
             self._refresh_runtime_settings()
             return f"已保存 Access Token：{_mask_key(value)}"
 
@@ -931,14 +988,14 @@ class NewAPIKeyDistributorPlugin(Star):
             user_id = _as_int(value, 0)
             if user_id <= 0:
                 return "用法：/key 配置 user <NewAPI用户ID>"
-            self.store.set_runtime_config("admin_user_id", user_id)
+            self._set_plugin_config("admin_user_id", user_id)
             self._refresh_runtime_settings()
             return f"已保存 NewAPI 管理用户 ID：{user_id}"
 
         if key in {"url", "base_url", "地址"}:
             if not value:
                 return "用法：/key 配置 url <NewAPI地址>"
-            self.store.set_runtime_config("newapi_base_url", value)
+            self._set_plugin_config("newapi_base_url", value)
             self._refresh_runtime_settings()
             return f"已保存 NewAPI 地址：{value}"
 
@@ -954,14 +1011,14 @@ class NewAPIKeyDistributorPlugin(Star):
                 if not target:
                     return "用法：/key 配置 管理员 添加 <QQ>"
                 admins.add(target)
-                self.store.set_runtime_config("bot_admin_ids", sorted(admins))
+                self._set_plugin_config("bot_admin_ids", sorted(admins))
                 self._refresh_runtime_settings()
                 return f"已添加组件管理员：{target}"
             if action in {"删除", "remove", "del"}:
                 if not target:
                     return "用法：/key 配置 管理员 删除 <QQ>"
                 admins.discard(target)
-                self.store.set_runtime_config("bot_admin_ids", sorted(admins))
+                self._set_plugin_config("bot_admin_ids", sorted(admins))
                 self._refresh_runtime_settings()
                 return f"已删除组件管理员：{target}"
             return "用法：/key 配置 管理员 添加|删除|查看 <QQ>"
@@ -981,9 +1038,9 @@ class NewAPIKeyDistributorPlugin(Star):
             config_key = mapping.get(value.lower())
             if not config_key:
                 return "用法：/key 配置 清除 token|user|url|管理员"
-            self.store.set_runtime_config(config_key, "")
+            self._remove_plugin_config(config_key)
             self._refresh_runtime_settings()
-            return f"已清除运行时配置：{value}"
+            return f"已清除插件配置：{value}"
 
         return "未知配置项。发送 /key 配置 帮助 查看用法。"
 

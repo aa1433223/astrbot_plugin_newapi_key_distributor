@@ -27,7 +27,7 @@
     "description": "允许管理员聊天配置",
     "type": "bool",
     "default": true,
-    "hint": "开启后管理员可通过 /key 配置 token/user/url 等命令写入运行时配置。若 bot_admin_ids 为空，首个私聊配置者可完成初始化。"
+    "hint": "开启后管理员可通过 /key 配置 token/user/url 等命令直接写入 AstrBot 插件配置。若 bot_admin_ids 为空，首个私聊配置者可完成初始化。"
   },
   "auto_create_enabled": {
     "description": "允许用户自助创建 Key",
