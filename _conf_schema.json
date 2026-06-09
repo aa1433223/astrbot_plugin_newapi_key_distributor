@@ -96,10 +96,10 @@
     "hint": "传给 NewAPI token allow_ips，留空表示不限制。"
   },
   "delete_remote_on_user_delete": {
-    "description": "用户删除时同步删除远程 Token",
+    "description": "用户删除时同步删除远程 Token（兼容旧配置）",
     "type": "bool",
     "default": false,
-    "hint": "开启后 /key 删除 会尝试删除 NewAPI 远程 token。"
+    "hint": "兼容旧版本保留；当前版本 /key 删除 会在存在 token_id 且管理接口已配置时自动尝试删除 NewAPI 远程 token。"
   },
   "request_timeout_seconds": {
     "description": "请求超时秒数",

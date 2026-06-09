@@ -15,7 +15,7 @@ https://newapi.qianye.host/
 - `/key 创建 [用途说明]`：开启自助创建时直接创建；未开启时自动转为申请。
 - `/key 查看`：查看自己的 Key 记录。
 - `/key 用量 [记录ID]`：查询用量。默认不保存完整 Key，因此需要开启 `store_plain_keys` 后重新绑定才可用。
-- `/key 删除 <记录ID>`：删除/停用本地记录，可按配置同步删除远程 token。管理员也可按 QQ 删除该用户所有 active Key。
+- `/key 删除 <记录ID>`：删除/停用本地记录，并尝试同步删除 NewAPI 远程 token。管理员也可按 QQ 删除该用户所有 active Key。
 - `/key 审核`：管理员查看待审核申请。
 - `/key 通过 <申请ID> [姓名] [金额]`：管理员审批并自动创建 NewAPI token，分组和有效期使用默认值。
 - `/key 生成 <QQ> <姓名> [金额]`：管理员主动给指定用户发放 Key。QQ 和姓名必填，金额可省略。
@@ -89,6 +89,8 @@ default_model_limits =
 金额参数使用实际金额，不直接填写 NewAPI 原生额度。插件会用 `金额 * quota_per_amount_unit` 换算为 NewAPI 的 `remain_quota`。默认 `quota_per_amount_unit = 500000`，如你的站点换算不同，请在配置里调整。
 
 完整 Key 和 Access Token 不会在群聊展示。若在群聊执行会返回提示，请私聊机器人重新执行。
+
+删除 Key 时会尝试同步删除 NewAPI 远程 token，并私聊通知所有组件管理员；通知包含用户 QQ、记录 ID、名称、分组、剩余额度、删除时间和远程删除结果。
 
 ## NewAPI 权限
 

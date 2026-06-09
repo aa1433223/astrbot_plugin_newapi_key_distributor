@@ -17,7 +17,7 @@ from typing import Any
 
 import aiohttp
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.star_tools import StarTools
@@ -695,6 +695,29 @@ class NewAPIKeyDistributorPlugin(Star):
             return "完整 Key 只会通过私聊发送。请私聊机器人重新执行该命令，群聊中不会生成或展示完整 Key。"
         return None
 
+    def _private_umo_for_user(self, event: AstrMessageEvent, qq_id: str) -> str | None:
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        parts = origin.split(":", 2)
+        if len(parts) != 3 or not qq_id:
+            return None
+        return f"{parts[0]}:private:{qq_id}"
+
+    async def _send_private_text(
+        self,
+        event: AstrMessageEvent,
+        qq_id: str,
+        text: str,
+    ) -> bool:
+        umo = self._private_umo_for_user(event, qq_id)
+        if not umo:
+            return False
+        try:
+            await self.context.send_message(umo, MessageChain().message(text))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[NewAPIKey] 私聊通知管理员失败: admin={qq_id}, err={exc}")
+            return False
+
     def _can_manage_config(self, event: AstrMessageEvent, qq_id: str) -> bool:
         if not self.settings.enable_chat_config:
             return False
@@ -892,6 +915,91 @@ class NewAPIKeyDistributorPlugin(Star):
                 return "\n".join(parts)
             return json.dumps(usage, ensure_ascii=False, indent=2)
         return str(usage)
+
+    @staticmethod
+    def _first_present(data: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            if key in data and data[key] not in (None, ""):
+                return data[key]
+        return None
+
+    def _format_quota_value(self, value: Any) -> str:
+        if value in (None, ""):
+            return "未知"
+        quota = _as_float(value, -1)
+        if quota < 0:
+            return str(value)
+        amount = quota / max(1, self.settings.quota_per_amount_unit)
+        return f"{quota:g}（约 {amount:g} 金额）"
+
+    async def _remaining_quota_snapshot(self, item: dict[str, Any]) -> tuple[Any, str]:
+        key = str(item.get("key_plain") or "").strip()
+        if key:
+            try:
+                usage = await self.client.token_usage(key)
+                if isinstance(usage, dict):
+                    value = self._first_present(
+                        usage,
+                        ("remain_quota", "quota", "total_quota", "remaining_quota"),
+                    )
+                    if value is not None:
+                        return value, "用量接口"
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[NewAPIKey] 删除前查询 key 剩余额度失败: {exc}")
+
+        token_name = str(item.get("token_name") or "").strip()
+        if token_name and self.client.configured():
+            try:
+                token = await self.client.find_token_by_name(token_name)
+                if isinstance(token, dict):
+                    value = self._first_present(
+                        token,
+                        ("remain_quota", "quota", "total_quota", "remaining_quota"),
+                    )
+                    if value is not None:
+                        return value, "管理接口"
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[NewAPIKey] 删除前查询 token 剩余额度失败: {exc}")
+
+        return item.get("quota"), "本地记录"
+
+    def _format_delete_notice(
+        self,
+        item: dict[str, Any],
+        *,
+        operator_qq: str,
+        deleted_at: int,
+        remaining_quota: Any,
+        quota_source: str,
+        remote_status: str,
+    ) -> str:
+        delete_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(deleted_at))
+        return (
+            "NewAPI Key 删除通知\n"
+            f"删除时间：{delete_time}\n"
+            f"操作人：{operator_qq}\n"
+            f"用户 QQ：{item.get('qq_id')}\n"
+            f"记录 ID：{item.get('id')}\n"
+            f"Token ID：{item.get('token_id') or '-'}\n"
+            f"名称：{item.get('token_name') or '-'}\n"
+            f"分组：{item.get('group') or self.settings.default_group}\n"
+            f"剩余额度：{self._format_quota_value(remaining_quota)}（{quota_source}）\n"
+            f"远程删除：{remote_status}"
+        )
+
+    async def _notify_admins_private(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> tuple[int, int]:
+        sent = 0
+        failed = 0
+        for admin_qq in sorted(self.settings.bot_admin_ids):
+            if await self._send_private_text(event, admin_qq, text):
+                sent += 1
+            else:
+                failed += 1
+        return sent, failed
 
     @filter.command("key", alias=["apikey", "newapi"])
     async def key_command(self, event: AstrMessageEvent):
@@ -1239,28 +1347,58 @@ class NewAPIKeyDistributorPlugin(Star):
 
         remote_deleted = 0
         remote_failed = 0
+        remote_skipped = 0
+        notice_sent = 0
+        notice_failed = 0
         for item in items:
-            if (
-                self.settings.delete_remote_on_user_delete
-                and item.get("token_id")
-                and self.client.configured()
-            ):
+            remaining_quota, quota_source = await self._remaining_quota_snapshot(item)
+            remote_status = "未执行"
+            if item.get("token_id") and self.client.configured():
                 try:
                     await self.client.delete_token(int(item["token_id"]))
                     remote_deleted += 1
+                    remote_status = "成功"
                 except Exception as exc:  # noqa: BLE001
                     remote_failed += 1
+                    remote_status = f"失败：{exc}"
                     logger.warning(f"[NewAPIKey] 删除远程 token 失败: {exc}")
+            else:
+                remote_skipped += 1
+                if not item.get("token_id"):
+                    remote_status = "跳过：本地记录没有 token_id"
+                else:
+                    remote_status = "跳过：NewAPI 管理配置不完整"
+
+            deleted_at = int(time.time())
             self.store.update_key(
                 str(item["id"]),
                 status="deleted",
-                deleted_at=int(time.time()),
+                deleted_at=deleted_at,
                 deleted_by=qq_id,
+                deleted_group=item.get("group") or self.settings.default_group,
+                delete_remaining_quota=remaining_quota,
+                delete_remaining_quota_source=quota_source,
+                remote_delete_status=remote_status,
             )
+            notice = self._format_delete_notice(
+                item,
+                operator_qq=qq_id,
+                deleted_at=deleted_at,
+                remaining_quota=remaining_quota,
+                quota_source=quota_source,
+                remote_status=remote_status,
+            )
+            sent, failed = await self._notify_admins_private(event, notice)
+            notice_sent += sent
+            notice_failed += failed
         extra = ""
-        if remote_deleted or remote_failed:
-            extra = f"，远程删除成功 {remote_deleted} 个，失败 {remote_failed} 个"
-        yield event.plain_result(f"已删除本地记录 {len(items)} 条{extra}。")
+        if remote_deleted or remote_failed or remote_skipped:
+            extra = (
+                f"，远程删除成功 {remote_deleted} 个，失败 {remote_failed} 个，"
+                f"跳过 {remote_skipped} 个"
+            )
+        notice_extra = f"，管理员私聊通知成功 {notice_sent} 条，失败 {notice_failed} 条"
+        yield event.plain_result(f"已删除本地记录 {len(items)} 条{extra}{notice_extra}。")
 
     def _resolve_edit_target(
         self,
