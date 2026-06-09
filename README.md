@@ -24,6 +24,14 @@ https://newapi.qianye.host/
 - `/key 检查`：管理员检查 NewAPI 管理接口配置是否可用。
 - `/key 配置 ...`：管理员私聊写入 NewAPI 地址、Access Token、用户 ID 和组件管理员。
 
+组件管理员拥有额外权限：
+
+- 发放/审批创建不受 `max_keys_per_user` 限制。
+- `/key 查看` 查看所有 active Key，`/key 查看 <QQ>` 查看指定用户。
+- `/key 删除 <记录ID>` 删除任意记录，`/key 删除 <QQ>` 删除该用户所有 active Key。
+- `/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]` 修改任意 Key，并尽量同步 NewAPI 远程 token。
+- `/key 用量 <记录ID|QQ>` 查询任意记录用量。
+
 命令别名：
 
 ```text
@@ -146,4 +154,11 @@ New-Api-User: <admin_user_id>
 
 ```text
 /key 通过 1 名称=测试 分组=vip 金额=100000 有效期=7 模型=gpt-4o-mini
+```
+
+修改已有 Key：
+
+```text
+/key 修改 ab12cd34 张三 vip 1000000 30
+/key 修改 123456789 张三 30
 ```

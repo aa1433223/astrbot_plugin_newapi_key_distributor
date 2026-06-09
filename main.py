@@ -257,6 +257,35 @@ class NewAPIClient:
     async def delete_token(self, token_id: int) -> None:
         await self._request("DELETE", f"/api/token/{token_id}")
 
+    async def update_token(
+        self,
+        *,
+        token_id: int,
+        name: str,
+        quota: int,
+        expire_days: int,
+        group: str,
+        model_limits: str,
+        allow_ips: str,
+    ) -> None:
+        expired_time = -1
+        if expire_days > 0:
+            expired_time = int(time.time()) + expire_days * 86400
+
+        payload = {
+            "id": token_id,
+            "name": name,
+            "expired_time": expired_time,
+            "remain_quota": quota,
+            "unlimited_quota": False,
+            "model_limits_enabled": bool(model_limits.strip()),
+            "model_limits": model_limits.strip(),
+            "group": group.strip() or "default",
+            "allow_ips": allow_ips.strip(),
+            "cross_group_retry": False,
+        }
+        await self._request("PUT", "/api/token/", json_body=payload)
+
     async def token_usage(self, key: str) -> Any:
         return await self._request(
             "GET",
@@ -370,6 +399,20 @@ class KeyStore:
             for item in self.data.get("keys", {}).values()
             if item.get("qq_id") == qq_id and item.get("status") == "active"
         ]
+
+    def keys_for_user(self, qq_id: str, *, active_only: bool = False) -> list[dict[str, Any]]:
+        return [
+            item
+            for item in self.data.get("keys", {}).values()
+            if item.get("qq_id") == qq_id
+            and (not active_only or item.get("status") == "active")
+        ]
+
+    def all_keys(self, *, active_only: bool = False) -> list[dict[str, Any]]:
+        items = list(self.data.get("keys", {}).values())
+        if active_only:
+            items = [item for item in items if item.get("status") == "active"]
+        return sorted(items, key=lambda item: int(item.get("created_at") or 0), reverse=True)
 
     def get_key(self, key_id: str) -> dict[str, Any] | None:
         item = self.data.get("keys", {}).get(key_id)
@@ -693,12 +736,14 @@ class NewAPIKeyDistributorPlugin(Star):
         reason: str,
         created_by: str,
         options: KeyCreateOptions | None = None,
+        bypass_user_limit: bool = False,
     ) -> tuple[dict[str, Any], str]:
         if self.store.is_banned(qq_id):
             raise NewAPIError("该用户已被封禁，无法创建 Key。")
-        too_many = self._too_many_keys_message(qq_id)
-        if too_many:
-            raise NewAPIError(too_many)
+        if not bypass_user_limit:
+            too_many = self._too_many_keys_message(qq_id)
+            if too_many:
+                raise NewAPIError(too_many)
 
         options = options or KeyCreateOptions()
         token_name = options.name.strip() or f"qq_{qq_id}_{int(time.time())}"
@@ -826,15 +871,26 @@ class NewAPIKeyDistributorPlugin(Star):
         # name group amount expire_days
         if positional and not options.name:
             options.name = positional[0]
-        if len(positional) > 1 and not options.group:
-            options.group = positional[1]
-        if len(positional) > 2 and options.amount is None:
-            amount = _as_float(positional[2], -1)
+        rest_positional = positional[1:]
+        if rest_positional:
+            first = rest_positional[0]
+            if _as_float(first, -1) > 0:
+                if options.amount is None:
+                    options.amount = _as_float(first, -1)
+                rest_positional = rest_positional[1:]
+            else:
+                if not options.group:
+                    options.group = first
+                rest_positional = rest_positional[1:]
+
+        if rest_positional and options.amount is None:
+            amount = _as_float(rest_positional[0], -1)
             if amount <= 0:
                 raise ValueError("金额必须是大于 0 的数字")
             options.amount = amount
-        if len(positional) > 3 and options.expire_days is None:
-            expire_days = _as_int(positional[3], -1)
+
+        if len(rest_positional) > 1 and options.expire_days is None:
+            expire_days = _as_int(rest_positional[1], -1)
             if expire_days < 0:
                 raise ValueError("expire 必须是非负整数")
             options.expire_days = expire_days
@@ -898,12 +954,15 @@ class NewAPIKeyDistributorPlugin(Star):
             async for result in self._handle_create(event, qq_id, rest):
                 yield result
         elif cmd in {"查看", "我的", "list", "状态"}:
-            yield event.plain_result(self._handle_list(qq_id))
+            yield event.plain_result(self._handle_list(qq_id, rest))
         elif cmd in {"用量", "usage"}:
             async for result in self._handle_usage(event, qq_id, rest):
                 yield result
         elif cmd in {"删除", "delete"}:
             async for result in self._handle_delete(event, qq_id, rest):
+                yield result
+        elif cmd in {"修改", "edit", "update"}:
+            async for result in self._handle_update_key(event, qq_id, rest):
                 yield result
         elif cmd in {"审核", "review"}:
             yield event.plain_result(self._handle_review_list(qq_id))
@@ -943,6 +1002,7 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 审核 - 查看待审核申请\n"
             "/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数] - 创建并发放 Key\n"
             "/key 生成 <QQ> <姓名> [分组] [金额] [过期天数] - 主动发放 Key\n"
+            "/key 修改 <记录ID> [姓名] [分组] [金额] [过期天数] - 修改 Key\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
             "/key 检查 - 检查 NewAPI 管理配置"
@@ -1103,6 +1163,7 @@ class NewAPIKeyDistributorPlugin(Star):
                 qq_id,
                 reason=reason or "用户自助创建",
                 created_by=qq_id,
+                bypass_user_limit=self._is_admin(qq_id),
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[NewAPIKey] 创建 Key 失败: {exc}", exc_info=True)
@@ -1116,17 +1177,46 @@ class NewAPIKeyDistributorPlugin(Star):
             f"脱敏：{record['key_masked']}"
         )
 
-    def _handle_list(self, qq_id: str) -> str:
-        items = self.store.active_keys(qq_id)
+    def _handle_list(self, qq_id: str, target: str = "") -> str:
+        target = (target or "").strip()
+        if self._is_admin(qq_id):
+            if target in {"自己", "me"}:
+                items = self.store.active_keys(qq_id)
+                title = "你的 Key："
+            elif target:
+                items = self.store.keys_for_user(target, active_only=True)
+                title = f"{target} 的 active Key："
+            else:
+                items = self.store.all_keys(active_only=True)
+                title = "全部 active Key："
+        else:
+            items = self.store.active_keys(qq_id)
+            title = "你的 Key："
+
         if not items:
-            return "你还没有 active Key。"
-        lines = ["你的 Key："]
-        lines.extend(self._format_key_record(item) for item in items)
+            return "没有 active Key。"
+        lines = [title]
+        lines.extend(self._format_key_record(item) for item in items[:50])
+        if len(items) > 50:
+            lines.append(f"... 还有 {len(items) - 50} 条未显示")
         return "\n".join(lines)
 
     async def _handle_usage(self, event: AstrMessageEvent, qq_id: str, key_id: str):
         items = self.store.active_keys(qq_id)
-        if key_id:
+        if key_id and self._is_admin(qq_id):
+            item = self.store.get_key(key_id)
+            if item:
+                items = [item]
+            else:
+                user_items = self.store.keys_for_user(key_id, active_only=True)
+                if len(user_items) == 1:
+                    items = user_items
+                elif len(user_items) > 1:
+                    yield event.plain_result("该 QQ 有多条 active Key，请使用记录 ID 查询。")
+                    return
+                else:
+                    items = []
+        elif key_id:
             items = [item for item in items if item.get("id") == key_id]
         if not items:
             yield event.plain_result("没有找到可查询的 Key 记录。")
@@ -1149,26 +1239,150 @@ class NewAPIKeyDistributorPlugin(Star):
 
     async def _handle_delete(self, event: AstrMessageEvent, qq_id: str, key_id: str):
         if not key_id:
-            yield event.plain_result("用法：/key 删除 <Key记录ID>")
+            yield event.plain_result("用法：/key 删除 <Key记录ID>；管理员也可 /key 删除 <QQ>")
             return
+        items: list[dict[str, Any]]
         item = self.store.get_key(key_id)
-        if not item or item.get("qq_id") != qq_id:
+        if item:
+            if item.get("qq_id") != qq_id and not self._is_admin(qq_id):
+                yield event.plain_result("没有权限删除这个 Key 记录。")
+                return
+            items = [item]
+        elif self._is_admin(qq_id):
+            items = self.store.keys_for_user(key_id, active_only=True)
+            if not items:
+                yield event.plain_result("没有找到这个记录 ID，或该 QQ 没有 active Key。")
+                return
+        else:
             yield event.plain_result("没有找到属于你的这个 Key 记录。")
             return
-        remote_deleted = False
-        if (
-            self.settings.delete_remote_on_user_delete
-            and item.get("token_id")
-            and self.client.configured()
-        ):
+
+        remote_deleted = 0
+        remote_failed = 0
+        for item in items:
+            if (
+                self.settings.delete_remote_on_user_delete
+                and item.get("token_id")
+                and self.client.configured()
+            ):
+                try:
+                    await self.client.delete_token(int(item["token_id"]))
+                    remote_deleted += 1
+                except Exception as exc:  # noqa: BLE001
+                    remote_failed += 1
+                    logger.warning(f"[NewAPIKey] 删除远程 token 失败: {exc}")
+            self.store.update_key(
+                str(item["id"]),
+                status="deleted",
+                deleted_at=int(time.time()),
+                deleted_by=qq_id,
+            )
+        extra = ""
+        if remote_deleted or remote_failed:
+            extra = f"，远程删除成功 {remote_deleted} 个，失败 {remote_failed} 个"
+        yield event.plain_result(f"已删除本地记录 {len(items)} 条{extra}。")
+
+    def _resolve_edit_target(
+        self,
+        operator_qq: str,
+        target: str,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        item = self.store.get_key(target)
+        if item:
+            if item.get("qq_id") != operator_qq and not self._is_admin(operator_qq):
+                return None, "没有权限修改这个 Key 记录。"
+            return item, None
+
+        if self._is_admin(operator_qq):
+            items = self.store.keys_for_user(target, active_only=True)
+            if len(items) == 1:
+                return items[0], None
+            if len(items) > 1:
+                return None, "该 QQ 有多条 active Key，请使用记录 ID 修改。"
+
+        return None, "没有找到可修改的 Key 记录。"
+
+    async def _handle_update_key(self, event: AstrMessageEvent, qq_id: str, rest: str):
+        target, _, option_text = rest.partition(" ")
+        target = target.strip()
+        if not target or not option_text.strip():
+            yield event.plain_result(
+                "用法：/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]\n"
+                "示例：/key 修改 ab12cd34 张三 vip 1000000 30"
+            )
+            return
+
+        item, error = self._resolve_edit_target(qq_id, target)
+        if error:
+            yield event.plain_result(error)
+            return
+        assert item is not None
+
+        try:
+            options = self._parse_create_options(option_text)
+        except ValueError as exc:
+            yield event.plain_result(f"参数错误：{exc}")
+            return
+
+        token_name = options.name.strip() or str(item.get("token_name") or "")
+        group = options.group.strip() or str(item.get("group") or self.settings.default_group)
+        amount = (
+            options.amount
+            if options.amount is not None
+            else _as_float(item.get("amount"), self.settings.default_amount)
+        )
+        if amount <= 0:
+            yield event.plain_result("金额必须大于 0。")
+            return
+        quota = int(round(amount * self.settings.quota_per_amount_unit))
+        expire_days = (
+            options.expire_days
+            if options.expire_days is not None
+            else _as_int(item.get("expire_days"), self.settings.default_expire_days)
+        )
+        model_limits = options.model_limits.strip() or str(
+            item.get("model_limits") or self.settings.default_model_limits
+        )
+        allow_ips = options.allow_ips.strip() or str(
+            item.get("allow_ips") or self.settings.allow_ips
+        )
+
+        remote_updated = False
+        if item.get("token_id") and self.client.configured():
             try:
-                await self.client.delete_token(int(item["token_id"]))
-                remote_deleted = True
+                await self.client.update_token(
+                    token_id=int(item["token_id"]),
+                    name=token_name,
+                    quota=quota,
+                    expire_days=expire_days,
+                    group=group,
+                    model_limits=model_limits,
+                    allow_ips=allow_ips,
+                )
+                remote_updated = True
             except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[NewAPIKey] 删除远程 token 失败: {exc}")
-        self.store.update_key(key_id, status="deleted", deleted_at=int(time.time()))
-        extra = "，远程 token 已同步删除" if remote_deleted else ""
-        yield event.plain_result(f"已删除本地记录：{key_id}{extra}。")
+                logger.error(f"[NewAPIKey] 修改远程 token 失败: {exc}", exc_info=True)
+                yield event.plain_result(f"远程 token 修改失败：{exc}")
+                return
+
+        self.store.update_key(
+            str(item["id"]),
+            token_name=token_name,
+            group=group,
+            amount=amount,
+            quota=quota,
+            quota_per_amount_unit=self.settings.quota_per_amount_unit,
+            expire_days=expire_days,
+            model_limits=model_limits,
+            allow_ips=allow_ips,
+            updated_by=qq_id,
+        )
+        updated = self.store.get_key(str(item["id"])) or item
+        suffix = "，远程 token 已同步修改" if remote_updated else ""
+        yield event.plain_result(
+            f"已修改 Key 记录：{item['id']}{suffix}\n"
+            f"{self._format_create_options(updated)}"
+        )
 
     def _handle_review_list(self, qq_id: str) -> str:
         if not self._is_admin(qq_id):
@@ -1215,6 +1429,7 @@ class NewAPIKeyDistributorPlugin(Star):
                 reason=str(app.get("reason", "")),
                 created_by=admin_qq,
                 options=options,
+                bypass_user_limit=True,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[NewAPIKey] 审批创建 Key 失败: {exc}", exc_info=True)
@@ -1268,6 +1483,7 @@ class NewAPIKeyDistributorPlugin(Star):
                 reason="管理员主动发放",
                 created_by=admin_qq,
                 options=options,
+                bypass_user_limit=True,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[NewAPIKey] 管理员主动发放 Key 失败: {exc}", exc_info=True)
