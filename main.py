@@ -47,6 +47,13 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _as_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -80,6 +87,8 @@ class PluginSettings:
     max_keys_per_user: int
     default_group: str
     default_quota: int
+    default_amount: float
+    quota_per_amount_unit: int
     default_expire_days: int
     default_model_limits: str
     allow_ips: str
@@ -91,7 +100,7 @@ class PluginSettings:
 class KeyCreateOptions:
     name: str = ""
     group: str = ""
-    quota: int | None = None
+    amount: float | None = None
     expire_days: int | None = None
     model_limits: str = ""
     allow_ips: str = ""
@@ -482,11 +491,26 @@ class NewAPIKeyDistributorPlugin(Star):
             max_keys_per_user=max(
                 1, _as_int(self._cfg(config, "max_keys_per_user", 1), 1)
             ),
-            default_group=str(self._cfg(config, "default_group", "default")).strip()
-            or "default",
+            default_group=str(
+                self._cfg(config, "default_group", "浅夜の梦专属号池")
+            ).strip()
+            or "浅夜の梦专属号池",
             default_quota=_as_int(self._cfg(config, "default_quota", 500000), 500000),
+            default_amount=_as_float(
+                self._cfg(
+                    config,
+                    "default_amount",
+                    _as_int(self._cfg(config, "default_quota", 500000), 500000)
+                    / max(1, _as_int(self._cfg(config, "quota_per_amount_unit", 500000), 500000)),
+                ),
+                1.0,
+            ),
+            quota_per_amount_unit=max(
+                1,
+                _as_int(self._cfg(config, "quota_per_amount_unit", 500000), 500000),
+            ),
             default_expire_days=_as_int(
-                self._cfg(config, "default_expire_days", 30), 30
+                self._cfg(config, "default_expire_days", 0), 0
             ),
             default_model_limits=str(
                 self._cfg(config, "default_model_limits", "")
@@ -570,6 +594,11 @@ class NewAPIKeyDistributorPlugin(Star):
             return "为避免泄露完整 Key，请私聊机器人执行这个命令。"
         return None
 
+    def _requires_secret_private(self, event: AstrMessageEvent) -> str | None:
+        if not self._is_private_event(event):
+            return "完整 Key 只会通过私聊发送。请私聊机器人重新执行该命令，群聊中不会生成或展示完整 Key。"
+        return None
+
     def _can_manage_config(self, event: AstrMessageEvent, qq_id: str) -> bool:
         if not self.settings.enable_chat_config:
             return False
@@ -621,11 +650,14 @@ class NewAPIKeyDistributorPlugin(Star):
         options = options or KeyCreateOptions()
         token_name = options.name.strip() or f"qq_{qq_id}_{int(time.time())}"
         group = options.group.strip() or self.settings.default_group
-        quota = (
-            options.quota
-            if options.quota is not None
-            else self.settings.default_quota
+        amount = (
+            options.amount
+            if options.amount is not None
+            else self.settings.default_amount
         )
+        if amount <= 0:
+            raise NewAPIError("金额必须大于 0。请传入金额，或在配置里设置 default_amount。")
+        quota = int(round(amount * self.settings.quota_per_amount_unit))
         expire_days = (
             options.expire_days
             if options.expire_days is not None
@@ -651,7 +683,9 @@ class NewAPIKeyDistributorPlugin(Star):
                 "key_masked": _mask_key(key),
                 "key_plain": key if self.settings.store_plain_keys else "",
                 "group": group,
+                "amount": amount,
                 "quota": quota,
+                "quota_per_amount_unit": self.settings.quota_per_amount_unit,
                 "expire_days": expire_days,
                 "model_limits": model_limits,
                 "allow_ips": allow_ips,
@@ -665,11 +699,14 @@ class NewAPIKeyDistributorPlugin(Star):
         token_id = item.get("token_id") or "-"
         token_name = item.get("token_name") or "-"
         source = item.get("source") or "-"
+        amount = item.get("amount")
         quota = item.get("quota") or "-"
         group = item.get("group") or "-"
+        amount_text = f"金额:{amount} | " if amount not in (None, "") else ""
         return (
             f"{item.get('id')} | {item.get('key_masked')} | "
-            f"名称:{token_name} | 来源:{source} | token:{token_id} | 分组:{group} | 额度:{quota}"
+            f"名称:{token_name} | 来源:{source} | token:{token_id} | "
+            f"分组:{group} | {amount_text}原生额度:{quota}"
         )
 
     def _parse_create_options(self, text: str) -> KeyCreateOptions:
@@ -688,9 +725,12 @@ class NewAPIKeyDistributorPlugin(Star):
             "名字": "name",
             "group": "group",
             "分组": "group",
-            "quota": "quota",
-            "额度": "quota",
-            "限额": "quota",
+            "quota": "amount",
+            "amount": "amount",
+            "money": "amount",
+            "额度": "amount",
+            "限额": "amount",
+            "金额": "amount",
             "expire": "expire_days",
             "days": "expire_days",
             "有效期": "expire_days",
@@ -716,7 +756,12 @@ class NewAPIKeyDistributorPlugin(Star):
                 positional.append(token)
                 continue
             value = value.strip()
-            if field in {"quota", "expire_days"}:
+            if field == "amount":
+                parsed_amount = _as_float(value, -1)
+                if parsed_amount <= 0:
+                    raise ValueError(f"{raw_key} 必须是大于 0 的金额")
+                options.amount = parsed_amount
+            elif field == "expire_days":
                 parsed = _as_int(value, -1)
                 if parsed < 0:
                     raise ValueError(f"{raw_key} 必须是非负整数")
@@ -725,16 +770,16 @@ class NewAPIKeyDistributorPlugin(Star):
                 setattr(options, field, value)
 
         # Positional shorthand for admins:
-        # name group quota expire_days
+        # name group amount expire_days
         if positional and not options.name:
             options.name = positional[0]
         if len(positional) > 1 and not options.group:
             options.group = positional[1]
-        if len(positional) > 2 and options.quota is None:
-            quota = _as_int(positional[2], -1)
-            if quota < 0:
-                raise ValueError("quota 必须是非负整数")
-            options.quota = quota
+        if len(positional) > 2 and options.amount is None:
+            amount = _as_float(positional[2], -1)
+            if amount <= 0:
+                raise ValueError("金额必须是大于 0 的数字")
+            options.amount = amount
         if len(positional) > 3 and options.expire_days is None:
             expire_days = _as_int(positional[3], -1)
             if expire_days < 0:
@@ -744,11 +789,14 @@ class NewAPIKeyDistributorPlugin(Star):
         return options
 
     def _format_create_options(self, record: dict[str, Any]) -> str:
+        expire_days = _as_int(record.get("expire_days"), 0)
+        expire_text = "永不过期" if expire_days == 0 else f"{expire_days} 天"
         return (
             f"名称：{record.get('token_name')}\n"
             f"分组：{record.get('group')}\n"
-            f"额度：{record.get('quota')}\n"
-            f"有效期：{record.get('expire_days')} 天\n"
+            f"金额：{record.get('amount')}\n"
+            f"原生额度：{record.get('quota')}\n"
+            f"有效期：{expire_text}\n"
             f"模型限制：{record.get('model_limits') or '不限制'}"
         )
 
@@ -840,8 +888,8 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 配置 url <地址> - 写入 NewAPI 地址\n"
             "/key 配置 管理员 添加 <QQ> - 添加组件管理员\n"
             "/key 审核 - 查看待审核申请\n"
-            "/key 通过 <申请ID> [name=名称 group=分组 quota=额度 expire=天数] - 创建并发放 Key\n"
-            "/key 生成 <QQ> [name=名称 group=分组 quota=额度 expire=天数] - 主动发放 Key\n"
+            "/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数] - 创建并发放 Key\n"
+            "/key 生成 <QQ> <姓名> [分组] [金额] [过期天数] - 主动发放 Key\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
             "/key 检查 - 检查 NewAPI 管理配置"
@@ -940,7 +988,7 @@ class NewAPIKeyDistributorPlugin(Star):
         return "未知配置项。发送 /key 配置 帮助 查看用法。"
 
     async def _handle_bind(self, event: AstrMessageEvent, qq_id: str, key: str):
-        private_msg = self._requires_private(event)
+        private_msg = self._requires_secret_private(event)
         if private_msg:
             yield event.plain_result(private_msg)
             return
@@ -981,7 +1029,7 @@ class NewAPIKeyDistributorPlugin(Star):
         return f"申请已提交，编号：{app['id']}。请等待管理员审核。"
 
     async def _handle_create(self, event: AstrMessageEvent, qq_id: str, reason: str):
-        private_msg = self._requires_private(event)
+        private_msg = self._requires_secret_private(event)
         if private_msg:
             yield event.plain_result(private_msg)
             return
@@ -1082,13 +1130,13 @@ class NewAPIKeyDistributorPlugin(Star):
         if not self._is_admin(admin_qq):
             yield event.plain_result("没有权限。")
             return
-        private_msg = self._requires_private(event)
+        private_msg = self._requires_secret_private(event)
         if private_msg:
             yield event.plain_result(private_msg)
             return
         if not app_id:
             yield event.plain_result(
-                "用法：/key 通过 <申请ID> [name=名称 group=分组 quota=额度 expire=天数]"
+                "用法：/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数]"
             )
             return
         app_id, _, option_text = app_id.partition(" ")
@@ -1135,7 +1183,7 @@ class NewAPIKeyDistributorPlugin(Star):
         if not self._is_admin(admin_qq):
             yield event.plain_result("没有权限。")
             return
-        private_msg = self._requires_private(event)
+        private_msg = self._requires_secret_private(event)
         if private_msg:
             yield event.plain_result(private_msg)
             return
@@ -1143,13 +1191,19 @@ class NewAPIKeyDistributorPlugin(Star):
         target_qq = target_qq.strip()
         if not target_qq:
             yield event.plain_result(
-                "用法：/key 生成 <QQ> [name=名称 group=分组 quota=额度 expire=天数]"
+                "用法：/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]"
             )
             return
         try:
             options = self._parse_create_options(option_text)
         except ValueError as exc:
             yield event.plain_result(f"参数错误：{exc}")
+            return
+        if not options.name.strip():
+            yield event.plain_result(
+                "用法：/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]\n"
+                "示例：/key 生成 123456789 张三 vip 1000000 30"
+            )
             return
         try:
             record, key = await self._create_key_for_user(

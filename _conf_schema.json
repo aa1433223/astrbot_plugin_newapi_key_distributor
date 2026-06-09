@@ -56,19 +56,31 @@
   "default_group": {
     "description": "默认 NewAPI 分组",
     "type": "string",
-    "default": "default",
+    "default": "浅夜の梦专属号池",
     "hint": "创建 NewAPI token 时使用的 group。"
   },
-  "default_quota": {
-    "description": "默认额度",
+  "default_amount": {
+    "description": "默认金额",
+    "type": "string",
+    "default": "1",
+    "hint": "管理员生成 Key 时未填写金额就使用该金额。插件会按 quota_per_amount_unit 换算为 NewAPI 原生额度。"
+  },
+  "quota_per_amount_unit": {
+    "description": "每 1 金额对应的原生额度",
     "type": "int",
     "default": 500000,
-    "hint": "NewAPI remain_quota 单位取决于你的站点计费配置。"
+    "hint": "NewAPI/OneAPI 常见换算是 1 金额单位 = 500000 原生 quota，可按你的站点实际配置调整。"
+  },
+  "default_quota": {
+    "description": "默认原生额度（兼容旧配置）",
+    "type": "int",
+    "default": 500000,
+    "hint": "旧版本使用的 NewAPI 原生 quota。未设置 default_amount 时会用它折算默认金额。"
   },
   "default_expire_days": {
     "description": "默认有效天数",
     "type": "int",
-    "default": 30,
+    "default": 0,
     "hint": "0 表示不过期。"
   },
   "default_model_limits": {

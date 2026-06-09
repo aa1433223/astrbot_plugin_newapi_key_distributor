@@ -17,8 +17,8 @@ https://newapi.qianye.host/
 - `/key 用量 [记录ID]`：查询用量。默认不保存完整 Key，因此需要开启 `store_plain_keys` 后重新绑定才可用。
 - `/key 删除 <记录ID>`：删除/停用本地记录，可按配置同步删除远程 token。
 - `/key 审核`：管理员查看待审核申请。
-- `/key 通过 <申请ID> [name=名称 group=分组 quota=额度 expire=天数]`：管理员审批并自动创建 NewAPI token。
-- `/key 生成 <QQ> [name=名称 group=分组 quota=额度 expire=天数]`：管理员主动给指定用户发放 Key。
+- `/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数]`：管理员审批并自动创建 NewAPI token。
+- `/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]`：管理员主动给指定用户发放 Key。QQ 和姓名必填，其它可省略。
 - `/key 拒绝 <申请ID> 原因`：管理员拒绝申请。
 - `/key 封禁 <QQ>`、`/key 解封 <QQ>`：管理员控制用户状态。
 - `/key 检查`：管理员检查 NewAPI 管理接口配置是否可用。
@@ -63,13 +63,18 @@ enable_chat_config = true
 private_only_for_secret = true
 store_plain_keys = false
 max_keys_per_user = 1
-default_group = default
-default_quota = 500000
-default_expire_days = 30
+default_group = 浅夜の梦专属号池
+default_amount = 1
+quota_per_amount_unit = 500000
+default_expire_days = 0
 default_model_limits =
 ```
 
 `store_plain_keys` 默认关闭。关闭时，本地只保存脱敏 Key 和 token id；完整 Key 只会在创建或审批通过时出现一次。开启后可以查询绑定 Key 的用量，但本地数据文件会保存明文 Key，请自行评估风险。
+
+金额参数使用实际金额，不直接填写 NewAPI 原生额度。插件会用 `金额 * quota_per_amount_unit` 换算为 NewAPI 的 `remain_quota`。默认 `quota_per_amount_unit = 500000`，如你的站点换算不同，请在配置里调整。
+
+完整 Key 和 Access Token 不会在群聊展示。若在群聊执行会返回提示，请私聊机器人重新执行。
 
 ## NewAPI 权限
 
@@ -115,7 +120,7 @@ New-Api-User: <admin_user_id>
 
 ```text
 /key 审核
-/key 通过 1 name=测试用户 group=default quota=500000 expire=30
+/key 通过 1 测试用户 浅夜の梦专属号池 1000000 30
 ```
 
 5. 用户后续查看：
@@ -127,17 +132,17 @@ New-Api-User: <admin_user_id>
 管理员也可以不走申请，私聊机器人主动生成：
 
 ```text
-/key 生成 123456789 name=张三 group=vip quota=1000000 expire=30 model=gpt-4o-mini
-```
-
-参数也支持中文别名：
-
-```text
-/key 通过 1 名称=测试 分组=vip 额度=100000 有效期=7 模型=gpt-4o-mini
-```
-
-还支持简写位置参数，顺序是 `名称 分组 额度 有效期`：
-
-```text
 /key 生成 123456789 张三 vip 1000000 30
+```
+
+也可以只填写 QQ 和姓名，其它使用默认值：
+
+```text
+/key 生成 123456789 张三
+```
+
+仍然支持 key=value 写法，金额可写作 `金额=` 或 `amount=`：
+
+```text
+/key 通过 1 名称=测试 分组=vip 金额=100000 有效期=7 模型=gpt-4o-mini
 ```
