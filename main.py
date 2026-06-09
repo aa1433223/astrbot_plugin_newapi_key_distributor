@@ -924,7 +924,7 @@ class NewAPIKeyDistributorPlugin(Star):
         elif cmd in {"用量", "usage"}:
             async for result in self._handle_usage(event, qq_id, rest):
                 yield result
-        elif cmd in {"删除", "delete"}:
+        elif cmd in {"删除", "删除key", "删key", "delete", "remove", "del"}:
             async for result in self._handle_delete(event, qq_id, rest):
                 yield result
         elif cmd in {"修改", "edit", "update"}:
@@ -932,6 +932,9 @@ class NewAPIKeyDistributorPlugin(Star):
                 yield result
         elif cmd in {"修改名称", "改名", "名称", "rename"}:
             async for result in self._handle_update_key_field(event, qq_id, rest, "name"):
+                yield result
+        elif cmd in {"修改分组", "分组", "group"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "group"):
                 yield result
         elif cmd in {"修改金额", "金额", "额度", "amount"}:
             async for result in self._handle_update_key_field(event, qq_id, rest, "amount"):
@@ -978,6 +981,7 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 通过 <申请ID> [姓名] [金额] - 创建并发放 Key\n"
             "/key 生成 <QQ> <姓名> [金额] - 主动发放 Key\n"
             "/key 修改 <记录ID|QQ> [姓名] [金额] - 修改 Key\n"
+            "/key 修改分组 <记录ID|QQ> <分组> - 单独修改分组\n"
             "/key 加额 <记录ID|QQ> <金额> - 给已有 Key 增加额度\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
@@ -1306,6 +1310,8 @@ class NewAPIKeyDistributorPlugin(Star):
             "名称": "name",
             "名字": "name",
             "姓名": "name",
+            "group": "group",
+            "分组": "group",
             "amount": "amount",
             "money": "amount",
             "金额": "amount",
@@ -1333,7 +1339,8 @@ class NewAPIKeyDistributorPlugin(Star):
         extra_updates: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, str | None, bool]:
         token_name = str(token_name or item.get("token_name") or f"qq_{item.get('qq_id')}")
-        group = self.settings.default_group
+        group = str(group or item.get("group") or self.settings.default_group).strip()
+        group = group or self.settings.default_group
         amount = amount if amount is not None else self._amount_from_record(item)
         if amount <= 0:
             return None, "金额必须大于 0。", False
@@ -1447,6 +1454,7 @@ class NewAPIKeyDistributorPlugin(Star):
         value = value.strip()
         field_names = {
             "name": "名称",
+            "group": "分组",
             "amount": "金额",
         }
         field_name = field_names.get(field, field)
@@ -1467,6 +1475,8 @@ class NewAPIKeyDistributorPlugin(Star):
         updates: dict[str, Any] = {}
         if field == "name":
             updates["token_name"] = value
+        elif field == "group":
+            updates["group"] = value or self.settings.default_group
         elif field == "amount":
             amount = _as_float(value, -1)
             if amount <= 0:
@@ -1481,6 +1491,7 @@ class NewAPIKeyDistributorPlugin(Star):
             item,
             operator_qq=qq_id,
             token_name=updates.get("token_name"),
+            group=updates.get("group"),
             amount=updates.get("amount"),
             action=f"修改{field_name}",
         )
@@ -1498,6 +1509,7 @@ class NewAPIKeyDistributorPlugin(Star):
     def _example_value(field: str) -> str:
         examples = {
             "name": "张三",
+            "group": "浅夜の梦专属号池",
             "amount": "1000000",
         }
         return examples.get(field, "值")
