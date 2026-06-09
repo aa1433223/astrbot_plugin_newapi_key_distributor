@@ -1,0 +1,1 @@
+"""NewAPI Key distributor plugin."""

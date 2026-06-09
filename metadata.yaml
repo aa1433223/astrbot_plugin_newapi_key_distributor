@@ -1,0 +1,7 @@
+name: astrbot_plugin_newapi_key_distributor
+display_name: NewAPI Key 分发
+desc: 面向 QQ/AstrBot 用户的 NewAPI Key 绑定、申请、审批与自动创建组件
+version: v0.1.0
+author: cl
+repo: https://github.com/aa1433223/astrbot_plugin_newapi_key_distributor
+astrbot_version: ">=4.16,<5"

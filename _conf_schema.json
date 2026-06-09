@@ -1,0 +1,98 @@
+{
+  "newapi_base_url": {
+    "description": "NewAPI 地址",
+    "type": "string",
+    "default": "https://newapi.qianye.host/",
+    "hint": "你的 NewAPI 站点地址，例如 https://newapi.qianye.host/"
+  },
+  "admin_access_token": {
+    "description": "NewAPI 管理访问令牌",
+    "type": "string",
+    "default": "",
+    "hint": "用于调用 /api/token 创建、查询、删除令牌。需要同时配置 admin_user_id。"
+  },
+  "admin_user_id": {
+    "description": "NewAPI 管理用户 ID",
+    "type": "int",
+    "default": 1,
+    "hint": "NewAPI 新版 access token 需要请求头 New-Api-User。"
+  },
+  "bot_admin_ids": {
+    "description": "组件管理员 QQ",
+    "type": "list",
+    "default": [],
+    "hint": "允许审核申请、拒绝申请、封禁用户的 QQ 号列表。"
+  },
+  "enable_chat_config": {
+    "description": "允许管理员聊天配置",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后管理员可通过 /key 配置 token/user/url 等命令写入运行时配置。若 bot_admin_ids 为空，首个私聊配置者可完成初始化。"
+  },
+  "auto_create_enabled": {
+    "description": "允许用户自助创建 Key",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时，普通用户 /key 创建 会转为提交申请；管理员不受限制。"
+  },
+  "private_only_for_secret": {
+    "description": "敏感操作仅允许私聊",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，绑定、创建等会暴露完整 Key 的命令应在私聊里使用。"
+  },
+  "store_plain_keys": {
+    "description": "本地保存完整 Key",
+    "type": "bool",
+    "default": false,
+    "hint": "默认只保存脱敏 Key。开启后可以用 /key 用量 查询绑定 Key，但本地 data.json 会保存明文 Key。"
+  },
+  "max_keys_per_user": {
+    "description": "每人最多 Key 数",
+    "type": "int",
+    "default": 1,
+    "hint": "仅统计本组件记录中状态为 active 的 Key。"
+  },
+  "default_group": {
+    "description": "默认 NewAPI 分组",
+    "type": "string",
+    "default": "default",
+    "hint": "创建 NewAPI token 时使用的 group。"
+  },
+  "default_quota": {
+    "description": "默认额度",
+    "type": "int",
+    "default": 500000,
+    "hint": "NewAPI remain_quota 单位取决于你的站点计费配置。"
+  },
+  "default_expire_days": {
+    "description": "默认有效天数",
+    "type": "int",
+    "default": 30,
+    "hint": "0 表示不过期。"
+  },
+  "default_model_limits": {
+    "description": "默认模型限制",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔，例如 gpt-4o-mini,deepseek-chat。留空表示不限制。"
+  },
+  "allow_ips": {
+    "description": "默认 IP 白名单",
+    "type": "string",
+    "default": "",
+    "hint": "传给 NewAPI token allow_ips，留空表示不限制。"
+  },
+  "delete_remote_on_user_delete": {
+    "description": "用户删除时同步删除远程 Token",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后 /key 删除 会尝试删除 NewAPI 远程 token。"
+  },
+  "request_timeout_seconds": {
+    "description": "请求超时秒数",
+    "type": "int",
+    "default": 20,
+    "hint": "调用 NewAPI 管理接口和用量接口的超时时间。"
+  }
+}
