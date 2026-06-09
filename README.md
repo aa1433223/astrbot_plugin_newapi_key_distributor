@@ -17,8 +17,8 @@ https://newapi.qianye.host/
 - `/key 用量 [记录ID]`：查询用量。默认不保存完整 Key，因此需要开启 `store_plain_keys` 后重新绑定才可用。
 - `/key 删除 <记录ID>`：删除/停用本地记录，可按配置同步删除远程 token。
 - `/key 审核`：管理员查看待审核申请。
-- `/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数]`：管理员审批并自动创建 NewAPI token。
-- `/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]`：管理员主动给指定用户发放 Key。QQ 和姓名必填，其它可省略。
+- `/key 通过 <申请ID> [姓名] [金额]`：管理员审批并自动创建 NewAPI token，分组和有效期使用默认值。
+- `/key 生成 <QQ> <姓名> [金额]`：管理员主动给指定用户发放 Key。QQ 和姓名必填，金额可省略。
 - `/key 加额 <记录ID|QQ> <金额>`：管理员给已有 Key 增加额度，并同步 NewAPI 远程 token。
 - `/key 拒绝 <申请ID> 原因`：管理员拒绝申请。
 - `/key 封禁 <QQ>`、`/key 解封 <QQ>`：管理员控制用户状态。
@@ -30,13 +30,9 @@ https://newapi.qianye.host/
 - 发放/审批创建不受 `max_keys_per_user` 限制。
 - `/key 查看` 查看所有 active Key，`/key 查看 <QQ>` 查看指定用户。
 - `/key 删除 <记录ID>` 删除任意记录，`/key 删除 <QQ>` 删除该用户所有 active Key。
-- `/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]` 修改任意 Key，并尽量同步 NewAPI 远程 token。
+- `/key 修改 <记录ID|QQ> [姓名] [金额]` 修改任意 Key，并尽量同步 NewAPI 远程 token。分组固定使用默认分组，有效期固定为 `0`。
 - `/key 修改名称 <记录ID|QQ> <名称>` 单独修改名称。
-- `/key 修改分组 <记录ID|QQ> <分组>` 单独修改分组；未传分组的更新会使用默认分组 `浅夜の梦专属号池`。
 - `/key 修改金额 <记录ID|QQ> <金额>` 单独修改金额额度。
-- `/key 修改日期 <记录ID|QQ> [过期天数]` 单独修改有效期；不传时默认 `0`，表示永不过期。
-- `/key 修改模型 <记录ID|QQ> <模型列表>` 单独修改模型限制。
-- `/key 修改IP <记录ID|QQ> <IP白名单>` 单独修改 IP 白名单。
 - `/key 加额 <记录ID|QQ> <金额>` 给任意 Key 追加金额额度，并同步 NewAPI 远程 token。
 - `/key 用量 <记录ID|QQ>` 查询任意记录用量。
 
@@ -137,7 +133,7 @@ New-Api-User: <admin_user_id>
 
 ```text
 /key 审核
-/key 通过 1 测试用户 浅夜の梦专属号池 1000000 30
+/key 通过 1 测试用户 1000000
 ```
 
 5. 用户后续查看：
@@ -149,7 +145,7 @@ New-Api-User: <admin_user_id>
 管理员也可以不走申请，私聊机器人主动生成：
 
 ```text
-/key 生成 123456789 张三 vip 1000000 30
+/key 生成 123456789 张三 1000000
 ```
 
 也可以只填写 QQ 和姓名，其它使用默认值：
@@ -158,26 +154,18 @@ New-Api-User: <admin_user_id>
 /key 生成 123456789 张三
 ```
 
-仍然支持 key=value 写法，金额可写作 `金额=` 或 `amount=`：
+也支持 key=value 写法，金额可写作 `金额=` 或 `amount=`：
 
 ```text
-/key 通过 1 名称=测试 分组=vip 金额=100000 有效期=7 模型=gpt-4o-mini
+/key 通过 1 名称=测试 金额=100000
 ```
 
 修改已有 Key：
 
 ```text
-/key 修改 ab12cd34 张三 vip 1000000 30
 /key 修改 123456789 张三 30
-/key 修改 ab12cd34 分组 浅夜の梦专属号池
-/key 修改 ab12cd34 日期 0
 /key 修改名称 ab12cd34 张三
-/key 修改分组 ab12cd34
-/key 修改分组 ab12cd34 浅夜の梦专属号池
 /key 修改金额 ab12cd34 1000000
-/key 修改日期 ab12cd34
-/key 修改模型 ab12cd34 gpt-4o-mini,deepseek-chat
-/key 修改IP ab12cd34 1.2.3.4
 ```
 
 给已有 Key 增加额度：

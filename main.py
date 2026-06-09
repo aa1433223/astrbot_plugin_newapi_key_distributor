@@ -747,7 +747,7 @@ class NewAPIKeyDistributorPlugin(Star):
 
         options = options or KeyCreateOptions()
         token_name = options.name.strip() or f"qq_{qq_id}_{int(time.time())}"
-        group = options.group.strip() or self.settings.default_group
+        group = self.settings.default_group
         amount = (
             options.amount
             if options.amount is not None
@@ -756,13 +756,9 @@ class NewAPIKeyDistributorPlugin(Star):
         if amount <= 0:
             raise NewAPIError("金额必须大于 0。请传入金额，或在配置里设置 default_amount。")
         quota = int(round(amount * self.settings.quota_per_amount_unit))
-        expire_days = (
-            options.expire_days
-            if options.expire_days is not None
-            else self.settings.default_expire_days
-        )
-        model_limits = options.model_limits.strip() or self.settings.default_model_limits
-        allow_ips = options.allow_ips.strip() or self.settings.allow_ips
+        expire_days = 0
+        model_limits = self.settings.default_model_limits
+        allow_ips = self.settings.allow_ips
 
         token_id, key = await self.client.create_token(
             name=token_name,
@@ -821,24 +817,12 @@ class NewAPIKeyDistributorPlugin(Star):
             "name": "name",
             "名称": "name",
             "名字": "name",
-            "group": "group",
-            "分组": "group",
             "quota": "amount",
             "amount": "amount",
             "money": "amount",
             "额度": "amount",
             "限额": "amount",
             "金额": "amount",
-            "expire": "expire_days",
-            "days": "expire_days",
-            "有效期": "expire_days",
-            "天数": "expire_days",
-            "model": "model_limits",
-            "models": "model_limits",
-            "模型": "model_limits",
-            "ips": "allow_ips",
-            "ip": "allow_ips",
-            "白名单": "allow_ips",
         }
         positional: list[str] = []
 
@@ -851,49 +835,31 @@ class NewAPIKeyDistributorPlugin(Star):
                 raw_key.strip()
             )
             if not field:
-                positional.append(token)
-                continue
+                raise ValueError(f"不支持参数 {raw_key}，请只传名称和金额")
             value = value.strip()
             if field == "amount":
                 parsed_amount = _as_float(value, -1)
                 if parsed_amount <= 0:
                     raise ValueError(f"{raw_key} 必须是大于 0 的金额")
                 options.amount = parsed_amount
-            elif field == "expire_days":
-                parsed = _as_int(value, -1)
-                if parsed < 0:
-                    raise ValueError(f"{raw_key} 必须是非负整数")
-                setattr(options, field, parsed)
             else:
                 setattr(options, field, value)
 
         # Positional shorthand for admins:
-        # name group amount expire_days
+        # name amount
         if positional and not options.name:
             options.name = positional[0]
         rest_positional = positional[1:]
         if rest_positional:
-            first = rest_positional[0]
-            if _as_float(first, -1) > 0:
-                if options.amount is None:
-                    options.amount = _as_float(first, -1)
-                rest_positional = rest_positional[1:]
-            else:
-                if not options.group:
-                    options.group = first
-                rest_positional = rest_positional[1:]
-
-        if rest_positional and options.amount is None:
+            if options.amount is not None:
+                raise ValueError("只支持传入名称和金额，不再接收分组或过期天数")
             amount = _as_float(rest_positional[0], -1)
             if amount <= 0:
-                raise ValueError("金额必须是大于 0 的数字")
+                raise ValueError("第二个参数必须是大于 0 的金额，不再接收分组")
             options.amount = amount
 
-        if len(rest_positional) > 1 and options.expire_days is None:
-            expire_days = _as_int(rest_positional[1], -1)
-            if expire_days < 0:
-                raise ValueError("expire 必须是非负整数")
-            options.expire_days = expire_days
+        if len(rest_positional) > 1:
+            raise ValueError("只支持传入名称和金额，不再接收分组或过期天数")
 
         return options
 
@@ -967,20 +933,8 @@ class NewAPIKeyDistributorPlugin(Star):
         elif cmd in {"修改名称", "改名", "名称", "rename"}:
             async for result in self._handle_update_key_field(event, qq_id, rest, "name"):
                 yield result
-        elif cmd in {"修改分组", "分组", "group"}:
-            async for result in self._handle_update_key_field(event, qq_id, rest, "group"):
-                yield result
         elif cmd in {"修改金额", "金额", "额度", "amount"}:
             async for result in self._handle_update_key_field(event, qq_id, rest, "amount"):
-                yield result
-        elif cmd in {"修改日期", "修改有效期", "日期", "有效期", "expire", "days"}:
-            async for result in self._handle_update_key_field(event, qq_id, rest, "expire_days"):
-                yield result
-        elif cmd in {"修改模型", "模型", "model"}:
-            async for result in self._handle_update_key_field(event, qq_id, rest, "model_limits"):
-                yield result
-        elif cmd in {"修改ip", "修改白名单", "ip", "白名单"}:
-            async for result in self._handle_update_key_field(event, qq_id, rest, "allow_ips"):
                 yield result
         elif cmd in {"加额", "加额度", "充值", "topup", "addquota"}:
             async for result in self._handle_add_quota(event, qq_id, rest):
@@ -1021,11 +975,9 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 配置 url <地址> - 写入 NewAPI 地址\n"
             "/key 配置 管理员 添加 <QQ> - 添加组件管理员\n"
             "/key 审核 - 查看待审核申请\n"
-            "/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数] - 创建并发放 Key\n"
-            "/key 生成 <QQ> <姓名> [分组] [金额] [过期天数] - 主动发放 Key\n"
-            "/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数] - 修改 Key\n"
-            "/key 修改分组 <记录ID|QQ> <分组> - 单独修改分组\n"
-            "/key 修改日期 <记录ID|QQ> [过期天数] - 单独修改有效期，默认 0\n"
+            "/key 通过 <申请ID> [姓名] [金额] - 创建并发放 Key\n"
+            "/key 生成 <QQ> <姓名> [金额] - 主动发放 Key\n"
+            "/key 修改 <记录ID|QQ> [姓名] [金额] - 修改 Key\n"
             "/key 加额 <记录ID|QQ> <金额> - 给已有 Key 增加额度\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
@@ -1354,24 +1306,11 @@ class NewAPIKeyDistributorPlugin(Star):
             "名称": "name",
             "名字": "name",
             "姓名": "name",
-            "group": "group",
-            "分组": "group",
             "amount": "amount",
             "money": "amount",
             "金额": "amount",
             "额度": "amount",
             "quota": "amount",
-            "expire": "expire_days",
-            "days": "expire_days",
-            "日期": "expire_days",
-            "有效期": "expire_days",
-            "天数": "expire_days",
-            "model": "model_limits",
-            "models": "model_limits",
-            "模型": "model_limits",
-            "ip": "allow_ips",
-            "ips": "allow_ips",
-            "白名单": "allow_ips",
         }
         field = aliases.get(tokens[0].strip().lower()) or aliases.get(tokens[0].strip())
         if not field:
@@ -1394,14 +1333,12 @@ class NewAPIKeyDistributorPlugin(Star):
         extra_updates: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, str | None, bool]:
         token_name = str(token_name or item.get("token_name") or f"qq_{item.get('qq_id')}")
-        group = str(group or self.settings.default_group).strip() or self.settings.default_group
+        group = self.settings.default_group
         amount = amount if amount is not None else self._amount_from_record(item)
         if amount <= 0:
             return None, "金额必须大于 0。", False
         quota = int(round(amount * self.settings.quota_per_amount_unit))
-        expire_days = 0 if expire_days is None else expire_days
-        if expire_days < 0:
-            return None, "有效期必须是非负整数，0 表示永不过期。", False
+        expire_days = 0
         model_limits_value = (
             item.get("model_limits") if model_limits is None else model_limits
         )
@@ -1447,8 +1384,8 @@ class NewAPIKeyDistributorPlugin(Star):
         target = target.strip()
         if not target or not option_text.strip():
             yield event.plain_result(
-                "用法：/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]\n"
-                "示例：/key 修改 ab12cd34 张三 vip 1000000 30"
+                "用法：/key 修改 <记录ID|QQ> [姓名] [金额]\n"
+                "示例：/key 修改 ab12cd34 张三 1000000"
             )
             return
 
@@ -1476,22 +1413,16 @@ class NewAPIKeyDistributorPlugin(Star):
             return
 
         token_name = options.name.strip() or str(item.get("token_name") or "")
-        group = options.group.strip() or self.settings.default_group
         amount = (
             options.amount
             if options.amount is not None
             else self._amount_from_record(item)
         )
-        expire_days = 0 if options.expire_days is None else options.expire_days
         updated, error, remote_updated = await self._sync_key_update(
             item,
             operator_qq=qq_id,
             token_name=token_name,
-            group=group,
             amount=amount,
-            expire_days=expire_days,
-            model_limits=options.model_limits.strip() or None,
-            allow_ips=options.allow_ips.strip() or None,
             action="修改",
         )
         if error:
@@ -1516,21 +1447,11 @@ class NewAPIKeyDistributorPlugin(Star):
         value = value.strip()
         field_names = {
             "name": "名称",
-            "group": "分组",
             "amount": "金额",
-            "expire_days": "有效期",
-            "model_limits": "模型限制",
-            "allow_ips": "IP 白名单",
         }
         field_name = field_names.get(field, field)
-        if not target or (field not in {"expire_days", "group"} and not value):
-            suffix = (
-                " [过期天数]"
-                if field == "expire_days"
-                else " [分组]"
-                if field == "group"
-                else f" <{field_name}>"
-            )
+        if not target or not value:
+            suffix = f" <{field_name}>"
             yield event.plain_result(
                 f"用法：/key 修改{field_name} <记录ID|QQ>{suffix}\n"
                 f"示例：/key 修改{field_name} ab12cd34 {self._example_value(field)}"
@@ -1546,24 +1467,12 @@ class NewAPIKeyDistributorPlugin(Star):
         updates: dict[str, Any] = {}
         if field == "name":
             updates["token_name"] = value
-        elif field == "group":
-            updates["group"] = value or self.settings.default_group
         elif field == "amount":
             amount = _as_float(value, -1)
             if amount <= 0:
                 yield event.plain_result("金额必须是大于 0 的数字。")
                 return
             updates["amount"] = amount
-        elif field == "expire_days":
-            expire_days = 0 if not value else _as_int(value, -1)
-            if expire_days < 0:
-                yield event.plain_result("有效期必须是非负整数，0 表示永不过期。")
-                return
-            updates["expire_days"] = expire_days
-        elif field == "model_limits":
-            updates["model_limits"] = value
-        elif field == "allow_ips":
-            updates["allow_ips"] = value
         else:
             yield event.plain_result("不支持的修改项。")
             return
@@ -1572,11 +1481,7 @@ class NewAPIKeyDistributorPlugin(Star):
             item,
             operator_qq=qq_id,
             token_name=updates.get("token_name"),
-            group=updates.get("group"),
             amount=updates.get("amount"),
-            expire_days=updates.get("expire_days"),
-            model_limits=updates.get("model_limits"),
-            allow_ips=updates.get("allow_ips"),
             action=f"修改{field_name}",
         )
         if sync_error:
@@ -1593,11 +1498,7 @@ class NewAPIKeyDistributorPlugin(Star):
     def _example_value(field: str) -> str:
         examples = {
             "name": "张三",
-            "group": "浅夜の梦专属号池",
             "amount": "1000000",
-            "expire_days": "0",
-            "model_limits": "gpt-4o-mini",
-            "allow_ips": "1.2.3.4",
         }
         return examples.get(field, "值")
 
@@ -1646,7 +1547,7 @@ class NewAPIKeyDistributorPlugin(Star):
         new_amount = old_amount + add_amount
         quota = int(round(new_amount * self.settings.quota_per_amount_unit))
         token_name = str(item.get("token_name") or f"qq_{item.get('qq_id')}")
-        group = str(item.get("group") or self.settings.default_group)
+        group = self.settings.default_group
         expire_days = 0
         model_limits = str(
             item.get("model_limits") or self.settings.default_model_limits
@@ -1713,7 +1614,7 @@ class NewAPIKeyDistributorPlugin(Star):
             return
         if not app_id:
             yield event.plain_result(
-                "用法：/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数]"
+                "用法：/key 通过 <申请ID> [姓名] [金额]"
             )
             return
         app_id, _, option_text = app_id.partition(" ")
@@ -1769,7 +1670,7 @@ class NewAPIKeyDistributorPlugin(Star):
         target_qq = target_qq.strip()
         if not target_qq:
             yield event.plain_result(
-                "用法：/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]"
+                "用法：/key 生成 <QQ> <姓名> [金额]"
             )
             return
         try:
@@ -1779,8 +1680,8 @@ class NewAPIKeyDistributorPlugin(Star):
             return
         if not options.name.strip():
             yield event.plain_result(
-                "用法：/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]\n"
-                "示例：/key 生成 123456789 张三 vip 1000000 30"
+                "用法：/key 生成 <QQ> <姓名> [金额]\n"
+                "示例：/key 生成 123456789 张三 1000000"
             )
             return
         try:
