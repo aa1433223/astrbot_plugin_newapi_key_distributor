@@ -923,6 +923,12 @@ class NewAPIKeyDistributorPlugin(Star):
                 return data[key]
         return None
 
+    @staticmethod
+    def _format_number(value: float) -> str:
+        if abs(value - round(value)) < 1e-9:
+            return str(int(round(value)))
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+
     def _format_quota_value(self, value: Any) -> str:
         if value in (None, ""):
             return "未知"
@@ -930,7 +936,10 @@ class NewAPIKeyDistributorPlugin(Star):
         if quota < 0:
             return str(value)
         amount = quota / max(1, self.settings.quota_per_amount_unit)
-        return f"{quota:g}（约 {amount:g} 金额）"
+        return (
+            f"{self._format_number(amount)}"
+            f"（原生额度 {self._format_number(quota)}）"
+        )
 
     def _resolve_balance_items(
         self,
@@ -962,7 +971,7 @@ class NewAPIKeyDistributorPlugin(Star):
         group = item.get("group") or "-"
         return (
             f"{item.get('id')} | QQ:{item.get('qq_id')} | 名称:{token_name} | "
-            f"分组:{group} | 剩余额度:{self._format_quota_value(remaining_quota)} "
+            f"分组:{group} | 剩余金额:{self._format_quota_value(remaining_quota)} "
             f"| 来源:{quota_source}"
         )
 
@@ -1387,7 +1396,7 @@ class NewAPIKeyDistributorPlugin(Star):
         if len(items) > 50:
             lines.append(f"... 还有 {len(items) - 50} 条未显示")
         if total_count:
-            lines.append(f"合计剩余额度：{self._format_quota_value(total_quota)}")
+            lines.append(f"合计剩余金额：{self._format_quota_value(total_quota)}")
 
         yield event.plain_result("\n".join(lines))
 
