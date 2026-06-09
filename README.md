@@ -31,6 +31,12 @@ https://newapi.qianye.host/
 - `/key 查看` 查看所有 active Key，`/key 查看 <QQ>` 查看指定用户。
 - `/key 删除 <记录ID>` 删除任意记录，`/key 删除 <QQ>` 删除该用户所有 active Key。
 - `/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]` 修改任意 Key，并尽量同步 NewAPI 远程 token。
+- `/key 修改名称 <记录ID|QQ> <名称>` 单独修改名称。
+- `/key 修改分组 <记录ID|QQ> <分组>` 单独修改分组；未传分组的更新会使用默认分组 `浅夜の梦专属号池`。
+- `/key 修改金额 <记录ID|QQ> <金额>` 单独修改金额额度。
+- `/key 修改日期 <记录ID|QQ> [过期天数]` 单独修改有效期；不传时默认 `0`，表示永不过期。
+- `/key 修改模型 <记录ID|QQ> <模型列表>` 单独修改模型限制。
+- `/key 修改IP <记录ID|QQ> <IP白名单>` 单独修改 IP 白名单。
 - `/key 加额 <记录ID|QQ> <金额>` 给任意 Key 追加金额额度，并同步 NewAPI 远程 token。
 - `/key 用量 <记录ID|QQ>` 查询任意记录用量。
 
@@ -163,6 +169,15 @@ New-Api-User: <admin_user_id>
 ```text
 /key 修改 ab12cd34 张三 vip 1000000 30
 /key 修改 123456789 张三 30
+/key 修改 ab12cd34 分组 浅夜の梦专属号池
+/key 修改 ab12cd34 日期 0
+/key 修改名称 ab12cd34 张三
+/key 修改分组 ab12cd34
+/key 修改分组 ab12cd34 浅夜の梦专属号池
+/key 修改金额 ab12cd34 1000000
+/key 修改日期 ab12cd34
+/key 修改模型 ab12cd34 gpt-4o-mini,deepseek-chat
+/key 修改IP ab12cd34 1.2.3.4
 ```
 
 给已有 Key 增加额度：

@@ -964,6 +964,24 @@ class NewAPIKeyDistributorPlugin(Star):
         elif cmd in {"修改", "edit", "update"}:
             async for result in self._handle_update_key(event, qq_id, rest):
                 yield result
+        elif cmd in {"修改名称", "改名", "名称", "rename"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "name"):
+                yield result
+        elif cmd in {"修改分组", "分组", "group"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "group"):
+                yield result
+        elif cmd in {"修改金额", "金额", "额度", "amount"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "amount"):
+                yield result
+        elif cmd in {"修改日期", "修改有效期", "日期", "有效期", "expire", "days"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "expire_days"):
+                yield result
+        elif cmd in {"修改模型", "模型", "model"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "model_limits"):
+                yield result
+        elif cmd in {"修改ip", "修改白名单", "ip", "白名单"}:
+            async for result in self._handle_update_key_field(event, qq_id, rest, "allow_ips"):
+                yield result
         elif cmd in {"加额", "加额度", "充值", "topup", "addquota"}:
             async for result in self._handle_add_quota(event, qq_id, rest):
                 yield result
@@ -1006,6 +1024,8 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数] - 创建并发放 Key\n"
             "/key 生成 <QQ> <姓名> [分组] [金额] [过期天数] - 主动发放 Key\n"
             "/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数] - 修改 Key\n"
+            "/key 修改分组 <记录ID|QQ> <分组> - 单独修改分组\n"
+            "/key 修改日期 <记录ID|QQ> [过期天数] - 单独修改有效期，默认 0\n"
             "/key 加额 <记录ID|QQ> <金额> - 给已有 Key 增加额度\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
@@ -1307,6 +1327,121 @@ class NewAPIKeyDistributorPlugin(Star):
 
         return None, f"没有找到可{action}的 Key 记录。"
 
+    def _amount_from_record(self, item: dict[str, Any]) -> float:
+        amount = _as_float(item.get("amount"), -1)
+        if amount > 0:
+            return amount
+        return _as_float(item.get("quota"), 0) / max(
+            1,
+            _as_int(
+                item.get("quota_per_amount_unit"),
+                self.settings.quota_per_amount_unit,
+            ),
+        )
+
+    def _split_update_field(self, text: str) -> tuple[str | None, str]:
+        if not text.strip():
+            return None, ""
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.split()
+        if not tokens:
+            return None, ""
+
+        aliases = {
+            "name": "name",
+            "名称": "name",
+            "名字": "name",
+            "姓名": "name",
+            "group": "group",
+            "分组": "group",
+            "amount": "amount",
+            "money": "amount",
+            "金额": "amount",
+            "额度": "amount",
+            "quota": "amount",
+            "expire": "expire_days",
+            "days": "expire_days",
+            "日期": "expire_days",
+            "有效期": "expire_days",
+            "天数": "expire_days",
+            "model": "model_limits",
+            "models": "model_limits",
+            "模型": "model_limits",
+            "ip": "allow_ips",
+            "ips": "allow_ips",
+            "白名单": "allow_ips",
+        }
+        field = aliases.get(tokens[0].strip().lower()) or aliases.get(tokens[0].strip())
+        if not field:
+            return None, text
+        value = " ".join(tokens[1:]).strip()
+        return field, value
+
+    async def _sync_key_update(
+        self,
+        item: dict[str, Any],
+        *,
+        operator_qq: str,
+        token_name: str | None = None,
+        group: str | None = None,
+        amount: float | None = None,
+        expire_days: int | None = None,
+        model_limits: str | None = None,
+        allow_ips: str | None = None,
+        action: str = "修改",
+        extra_updates: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None, bool]:
+        token_name = str(token_name or item.get("token_name") or f"qq_{item.get('qq_id')}")
+        group = str(group or self.settings.default_group).strip() or self.settings.default_group
+        amount = amount if amount is not None else self._amount_from_record(item)
+        if amount <= 0:
+            return None, "金额必须大于 0。", False
+        quota = int(round(amount * self.settings.quota_per_amount_unit))
+        expire_days = 0 if expire_days is None else expire_days
+        if expire_days < 0:
+            return None, "有效期必须是非负整数，0 表示永不过期。", False
+        model_limits_value = (
+            item.get("model_limits") if model_limits is None else model_limits
+        )
+        model_limits = str(model_limits_value or self.settings.default_model_limits)
+        allow_ips_value = item.get("allow_ips") if allow_ips is None else allow_ips
+        allow_ips = str(allow_ips_value or self.settings.allow_ips)
+
+        remote_updated = False
+        if item.get("token_id") and self.client.configured():
+            try:
+                await self.client.update_token(
+                    token_id=int(item["token_id"]),
+                    name=token_name,
+                    quota=quota,
+                    expire_days=expire_days,
+                    group=group,
+                    model_limits=model_limits,
+                    allow_ips=allow_ips,
+                )
+                remote_updated = True
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"[NewAPIKey] {action}远程 token 失败: {exc}", exc_info=True)
+                return None, f"远程 token {action}失败：{exc}", False
+
+        updates = {
+            "token_name": token_name,
+            "group": group,
+            "amount": amount,
+            "quota": quota,
+            "quota_per_amount_unit": self.settings.quota_per_amount_unit,
+            "expire_days": expire_days,
+            "model_limits": model_limits,
+            "allow_ips": allow_ips,
+            "updated_by": operator_qq,
+        }
+        if extra_updates:
+            updates.update(extra_updates)
+        self.store.update_key(str(item["id"]), **updates)
+        return self.store.get_key(str(item["id"])) or item, None, remote_updated
+
     async def _handle_update_key(self, event: AstrMessageEvent, qq_id: str, rest: str):
         target, _, option_text = rest.partition(" ")
         target = target.strip()
@@ -1323,6 +1458,17 @@ class NewAPIKeyDistributorPlugin(Star):
             return
         assert item is not None
 
+        field, value = self._split_update_field(option_text)
+        if field:
+            async for result in self._handle_update_key_field(
+                event,
+                qq_id,
+                f"{target} {value}".strip(),
+                field,
+            ):
+                yield result
+            return
+
         try:
             options = self._parse_create_options(option_text)
         except ValueError as exc:
@@ -1330,64 +1476,130 @@ class NewAPIKeyDistributorPlugin(Star):
             return
 
         token_name = options.name.strip() or str(item.get("token_name") or "")
-        group = options.group.strip() or str(item.get("group") or self.settings.default_group)
+        group = options.group.strip() or self.settings.default_group
         amount = (
             options.amount
             if options.amount is not None
-            else _as_float(item.get("amount"), self.settings.default_amount)
+            else self._amount_from_record(item)
         )
-        if amount <= 0:
-            yield event.plain_result("金额必须大于 0。")
-            return
-        quota = int(round(amount * self.settings.quota_per_amount_unit))
-        expire_days = (
-            options.expire_days
-            if options.expire_days is not None
-            else _as_int(item.get("expire_days"), self.settings.default_expire_days)
-        )
-        model_limits = options.model_limits.strip() or str(
-            item.get("model_limits") or self.settings.default_model_limits
-        )
-        allow_ips = options.allow_ips.strip() or str(
-            item.get("allow_ips") or self.settings.allow_ips
-        )
-
-        remote_updated = False
-        if item.get("token_id") and self.client.configured():
-            try:
-                await self.client.update_token(
-                    token_id=int(item["token_id"]),
-                    name=token_name,
-                    quota=quota,
-                    expire_days=expire_days,
-                    group=group,
-                    model_limits=model_limits,
-                    allow_ips=allow_ips,
-                )
-                remote_updated = True
-            except Exception as exc:  # noqa: BLE001
-                logger.error(f"[NewAPIKey] 修改远程 token 失败: {exc}", exc_info=True)
-                yield event.plain_result(f"远程 token 修改失败：{exc}")
-                return
-
-        self.store.update_key(
-            str(item["id"]),
+        expire_days = 0 if options.expire_days is None else options.expire_days
+        updated, error, remote_updated = await self._sync_key_update(
+            item,
+            operator_qq=qq_id,
             token_name=token_name,
             group=group,
             amount=amount,
-            quota=quota,
-            quota_per_amount_unit=self.settings.quota_per_amount_unit,
             expire_days=expire_days,
-            model_limits=model_limits,
-            allow_ips=allow_ips,
-            updated_by=qq_id,
+            model_limits=options.model_limits.strip() or None,
+            allow_ips=options.allow_ips.strip() or None,
+            action="修改",
         )
-        updated = self.store.get_key(str(item["id"])) or item
+        if error:
+            yield event.plain_result(error)
+            return
+        assert updated is not None
         suffix = "，远程 token 已同步修改" if remote_updated else ""
         yield event.plain_result(
             f"已修改 Key 记录：{item['id']}{suffix}\n"
             f"{self._format_create_options(updated)}"
         )
+
+    async def _handle_update_key_field(
+        self,
+        event: AstrMessageEvent,
+        qq_id: str,
+        rest: str,
+        field: str,
+    ):
+        target, _, value = rest.partition(" ")
+        target = target.strip()
+        value = value.strip()
+        field_names = {
+            "name": "名称",
+            "group": "分组",
+            "amount": "金额",
+            "expire_days": "有效期",
+            "model_limits": "模型限制",
+            "allow_ips": "IP 白名单",
+        }
+        field_name = field_names.get(field, field)
+        if not target or (field not in {"expire_days", "group"} and not value):
+            suffix = (
+                " [过期天数]"
+                if field == "expire_days"
+                else " [分组]"
+                if field == "group"
+                else f" <{field_name}>"
+            )
+            yield event.plain_result(
+                f"用法：/key 修改{field_name} <记录ID|QQ>{suffix}\n"
+                f"示例：/key 修改{field_name} ab12cd34 {self._example_value(field)}"
+            )
+            return
+
+        item, error = self._resolve_edit_target(qq_id, target, action=f"修改{field_name}")
+        if error:
+            yield event.plain_result(error)
+            return
+        assert item is not None
+
+        updates: dict[str, Any] = {}
+        if field == "name":
+            updates["token_name"] = value
+        elif field == "group":
+            updates["group"] = value or self.settings.default_group
+        elif field == "amount":
+            amount = _as_float(value, -1)
+            if amount <= 0:
+                yield event.plain_result("金额必须是大于 0 的数字。")
+                return
+            updates["amount"] = amount
+        elif field == "expire_days":
+            expire_days = 0 if not value else _as_int(value, -1)
+            if expire_days < 0:
+                yield event.plain_result("有效期必须是非负整数，0 表示永不过期。")
+                return
+            updates["expire_days"] = expire_days
+        elif field == "model_limits":
+            updates["model_limits"] = value
+        elif field == "allow_ips":
+            updates["allow_ips"] = value
+        else:
+            yield event.plain_result("不支持的修改项。")
+            return
+
+        updated, sync_error, remote_updated = await self._sync_key_update(
+            item,
+            operator_qq=qq_id,
+            token_name=updates.get("token_name"),
+            group=updates.get("group"),
+            amount=updates.get("amount"),
+            expire_days=updates.get("expire_days"),
+            model_limits=updates.get("model_limits"),
+            allow_ips=updates.get("allow_ips"),
+            action=f"修改{field_name}",
+        )
+        if sync_error:
+            yield event.plain_result(sync_error)
+            return
+        assert updated is not None
+        suffix = "，远程 token 已同步修改" if remote_updated else ""
+        yield event.plain_result(
+            f"已修改 Key {field_name}：{item['id']}{suffix}\n"
+            f"{self._format_create_options(updated)}"
+        )
+
+    @staticmethod
+    def _example_value(field: str) -> str:
+        examples = {
+            "name": "张三",
+            "group": "浅夜の梦专属号池",
+            "amount": "1000000",
+            "expire_days": "0",
+            "model_limits": "gpt-4o-mini",
+            "allow_ips": "1.2.3.4",
+        }
+        return examples.get(field, "值")
 
     async def _handle_add_quota(self, event: AstrMessageEvent, admin_qq: str, rest: str):
         if not self._is_admin(admin_qq):
@@ -1435,10 +1647,7 @@ class NewAPIKeyDistributorPlugin(Star):
         quota = int(round(new_amount * self.settings.quota_per_amount_unit))
         token_name = str(item.get("token_name") or f"qq_{item.get('qq_id')}")
         group = str(item.get("group") or self.settings.default_group)
-        expire_days = _as_int(
-            item.get("expire_days"),
-            self.settings.default_expire_days,
-        )
+        expire_days = 0
         model_limits = str(
             item.get("model_limits") or self.settings.default_model_limits
         )
