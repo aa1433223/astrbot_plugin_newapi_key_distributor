@@ -1,0 +1,2 @@
+# astrbot_plugin_newapi_key_distributor
+astr的newapikey管理插件
