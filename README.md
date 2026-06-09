@@ -15,6 +15,7 @@ https://newapi.qianye.host/
 - `/key 创建 [用途说明]`：开启自助创建时直接创建；未开启时自动转为申请。
 - `/key 查看`：查看自己的 Key 记录。
 - `/key 用量 [记录ID]`：查询用量。默认不保存完整 Key，因此需要开启 `store_plain_keys` 后重新绑定才可用。
+- `/key 余额`：查看自己 active Key 的剩余额度。
 - `/key 删除 <记录ID>`：删除/停用本地记录，并尝试同步删除 NewAPI 远程 token。管理员也可按 QQ 删除该用户所有 active Key。
 - `/key 审核`：管理员查看待审核申请。
 - `/key 通过 <申请ID> [姓名] [金额]`：管理员审批并自动创建 NewAPI token，分组和有效期使用默认值。
@@ -36,6 +37,7 @@ https://newapi.qianye.host/
 - `/key 修改金额 <记录ID|QQ> <金额>` 单独修改金额额度。
 - `/key 加额 <记录ID|QQ> <金额>` 给任意 Key 追加金额额度，并同步 NewAPI 远程 token。
 - `/key 用量 <记录ID|QQ>` 查询任意记录用量。
+- `/key 余额 <QQ|记录ID>` 查询指定用户或指定 Key 的剩余额度。
 
 命令别名：
 
@@ -143,6 +145,7 @@ New-Api-User: <admin_user_id>
 
 ```text
 /key 查看
+/key 余额
 ```
 
 管理员也可以不走申请，私聊机器人主动生成：
@@ -187,4 +190,11 @@ New-Api-User: <admin_user_id>
 ```text
 /key 加额 ab12cd34 100000
 /key 加额 123456789 100000
+```
+
+查看剩余额度：
+```text
+/key 余额
+/key 余额 123456789
+/key 余额 ab12cd34
 ```

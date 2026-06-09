@@ -932,6 +932,40 @@ class NewAPIKeyDistributorPlugin(Star):
         amount = quota / max(1, self.settings.quota_per_amount_unit)
         return f"{quota:g}（约 {amount:g} 金额）"
 
+    def _resolve_balance_items(
+        self,
+        operator_qq: str,
+        target: str,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        target = (target or "").strip()
+        if not target or target in {"自己", "me"}:
+            return self.store.active_keys(operator_qq), None
+
+        item = self.store.get_key(target)
+        if item:
+            if item.get("qq_id") != operator_qq and not self._is_admin(operator_qq):
+                return [], "没有权限查看这个 Key 的余额。"
+            return [item], None
+
+        if self._is_admin(operator_qq):
+            return self.store.keys_for_user(target, active_only=True), None
+
+        return [], "普通用户直接发送 /key 余额 即可查看自己的余额。"
+
+    def _format_balance_line(
+        self,
+        item: dict[str, Any],
+        remaining_quota: Any,
+        quota_source: str,
+    ) -> str:
+        token_name = item.get("token_name") or "-"
+        group = item.get("group") or "-"
+        return (
+            f"{item.get('id')} | QQ:{item.get('qq_id')} | 名称:{token_name} | "
+            f"分组:{group} | 剩余额度:{self._format_quota_value(remaining_quota)} "
+            f"| 来源:{quota_source}"
+        )
+
     async def _remaining_quota_snapshot(self, item: dict[str, Any]) -> tuple[Any, str]:
         key = str(item.get("key_plain") or "").strip()
         if key:
@@ -945,7 +979,7 @@ class NewAPIKeyDistributorPlugin(Star):
                     if value is not None:
                         return value, "用量接口"
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"[NewAPIKey] 删除前查询 key 剩余额度失败: {exc}")
+                logger.debug(f"[NewAPIKey] 查询 key 剩余额度失败: {exc}")
 
         token_name = str(item.get("token_name") or "").strip()
         if token_name and self.client.configured():
@@ -959,7 +993,7 @@ class NewAPIKeyDistributorPlugin(Star):
                     if value is not None:
                         return value, "管理接口"
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"[NewAPIKey] 删除前查询 token 剩余额度失败: {exc}")
+                logger.debug(f"[NewAPIKey] 查询 token 剩余额度失败: {exc}")
 
         return item.get("quota"), "本地记录"
 
@@ -1032,6 +1066,9 @@ class NewAPIKeyDistributorPlugin(Star):
         elif cmd in {"用量", "usage"}:
             async for result in self._handle_usage(event, qq_id, rest):
                 yield result
+        elif cmd in {"余额", "剩余", "查余额", "balance", "remain"}:
+            async for result in self._handle_balance(event, qq_id, rest):
+                yield result
         elif cmd in {"删除", "删除key", "删key", "delete", "remove", "del"}:
             async for result in self._handle_delete(event, qq_id, rest):
                 yield result
@@ -1078,6 +1115,7 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 创建 [用途说明] - 自助创建或提交申请\n"
             "/key 查看 - 查看我的 Key\n"
             "/key 用量 [Key记录ID] - 查询用量（需保存完整 Key）\n"
+            "/key 余额 - 查看自己的 Key 剩余额度\n"
             "/key 删除 <Key记录ID> - 删除/停用本地记录\n\n"
             "管理员：\n"
             "/key 配置 查看 - 查看 NewAPI 管理配置\n"
@@ -1091,6 +1129,7 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 修改 <记录ID|QQ> [姓名] [金额] - 修改 Key\n"
             "/key 修改分组 <记录ID|QQ> <分组> - 单独修改分组\n"
             "/key 加额 <记录ID|QQ> <金额> - 给已有 Key 增加额度\n"
+            "/key 余额 <QQ|记录ID> - 查看指定用户或 Key 的剩余额度\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
             "/key 检查 - 检查 NewAPI 管理配置"
@@ -1324,6 +1363,33 @@ class NewAPIKeyDistributorPlugin(Star):
         yield event.plain_result(
             f"{item.get('id')} | {item.get('key_masked')}\n{self._format_usage(usage)}"
         )
+
+    async def _handle_balance(self, event: AstrMessageEvent, qq_id: str, target: str):
+        items, error = self._resolve_balance_items(qq_id, target)
+        if error:
+            yield event.plain_result(error)
+            return
+        if not items:
+            yield event.plain_result("没有 active Key，无法查询余额。")
+            return
+
+        lines = ["Key 余额："]
+        total_quota = 0.0
+        total_count = 0
+        for item in items[:50]:
+            remaining_quota, quota_source = await self._remaining_quota_snapshot(item)
+            lines.append(self._format_balance_line(item, remaining_quota, quota_source))
+            quota = _as_float(remaining_quota, -1)
+            if quota >= 0:
+                total_quota += quota
+                total_count += 1
+
+        if len(items) > 50:
+            lines.append(f"... 还有 {len(items) - 50} 条未显示")
+        if total_count:
+            lines.append(f"合计剩余额度：{self._format_quota_value(total_quota)}")
+
+        yield event.plain_result("\n".join(lines))
 
     async def _handle_delete(self, event: AstrMessageEvent, qq_id: str, key_id: str):
         if not key_id:
