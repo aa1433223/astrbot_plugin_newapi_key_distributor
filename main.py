@@ -964,6 +964,9 @@ class NewAPIKeyDistributorPlugin(Star):
         elif cmd in {"修改", "edit", "update"}:
             async for result in self._handle_update_key(event, qq_id, rest):
                 yield result
+        elif cmd in {"加额", "加额度", "充值", "topup", "addquota"}:
+            async for result in self._handle_add_quota(event, qq_id, rest):
+                yield result
         elif cmd in {"审核", "review"}:
             yield event.plain_result(self._handle_review_list(qq_id))
         elif cmd in {"通过", "approve"}:
@@ -1002,7 +1005,8 @@ class NewAPIKeyDistributorPlugin(Star):
             "/key 审核 - 查看待审核申请\n"
             "/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数] - 创建并发放 Key\n"
             "/key 生成 <QQ> <姓名> [分组] [金额] [过期天数] - 主动发放 Key\n"
-            "/key 修改 <记录ID> [姓名] [分组] [金额] [过期天数] - 修改 Key\n"
+            "/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数] - 修改 Key\n"
+            "/key 加额 <记录ID|QQ> <金额> - 给已有 Key 增加额度\n"
             "/key 拒绝 <申请ID> 原因\n"
             "/key 封禁 <QQ> / /key 解封 <QQ>\n"
             "/key 检查 - 检查 NewAPI 管理配置"
@@ -1286,11 +1290,12 @@ class NewAPIKeyDistributorPlugin(Star):
         self,
         operator_qq: str,
         target: str,
+        action: str = "修改",
     ) -> tuple[dict[str, Any] | None, str | None]:
         item = self.store.get_key(target)
         if item:
             if item.get("qq_id") != operator_qq and not self._is_admin(operator_qq):
-                return None, "没有权限修改这个 Key 记录。"
+                return None, f"没有权限{action}这个 Key 记录。"
             return item, None
 
         if self._is_admin(operator_qq):
@@ -1298,9 +1303,9 @@ class NewAPIKeyDistributorPlugin(Star):
             if len(items) == 1:
                 return items[0], None
             if len(items) > 1:
-                return None, "该 QQ 有多条 active Key，请使用记录 ID 修改。"
+                return None, f"该 QQ 有多条 active Key，请使用记录 ID {action}。"
 
-        return None, "没有找到可修改的 Key 记录。"
+        return None, f"没有找到可{action}的 Key 记录。"
 
     async def _handle_update_key(self, event: AstrMessageEvent, qq_id: str, rest: str):
         target, _, option_text = rest.partition(" ")
@@ -1382,6 +1387,98 @@ class NewAPIKeyDistributorPlugin(Star):
         yield event.plain_result(
             f"已修改 Key 记录：{item['id']}{suffix}\n"
             f"{self._format_create_options(updated)}"
+        )
+
+    async def _handle_add_quota(self, event: AstrMessageEvent, admin_qq: str, rest: str):
+        if not self._is_admin(admin_qq):
+            yield event.plain_result("没有权限。")
+            return
+
+        target, _, amount_text = rest.partition(" ")
+        target = target.strip()
+        amount_text = amount_text.strip()
+        if not target or not amount_text:
+            yield event.plain_result(
+                "用法：/key 加额 <记录ID|QQ> <金额>\n"
+                "示例：/key 加额 ab12cd34 100000"
+            )
+            return
+
+        item, error = self._resolve_edit_target(admin_qq, target, action="加额")
+        if error:
+            yield event.plain_result(error)
+            return
+        assert item is not None
+
+        add_amount = _as_float(amount_text, -1)
+        if add_amount <= 0:
+            yield event.plain_result("增加金额必须是大于 0 的数字。")
+            return
+
+        if not item.get("token_id"):
+            yield event.plain_result("该记录没有 NewAPI token_id，无法同步远程额度。")
+            return
+        if not self.client.configured():
+            yield event.plain_result("NewAPI 管理接口未配置，请先配置 url、token 和 user。")
+            return
+
+        old_amount = _as_float(item.get("amount"), -1)
+        if old_amount < 0:
+            old_amount = _as_float(item.get("quota"), 0) / max(
+                1,
+                _as_int(
+                    item.get("quota_per_amount_unit"),
+                    self.settings.quota_per_amount_unit,
+                ),
+            )
+        new_amount = old_amount + add_amount
+        quota = int(round(new_amount * self.settings.quota_per_amount_unit))
+        token_name = str(item.get("token_name") or f"qq_{item.get('qq_id')}")
+        group = str(item.get("group") or self.settings.default_group)
+        expire_days = _as_int(
+            item.get("expire_days"),
+            self.settings.default_expire_days,
+        )
+        model_limits = str(
+            item.get("model_limits") or self.settings.default_model_limits
+        )
+        allow_ips = str(item.get("allow_ips") or self.settings.allow_ips)
+
+        try:
+            await self.client.update_token(
+                token_id=int(item["token_id"]),
+                name=token_name,
+                quota=quota,
+                expire_days=expire_days,
+                group=group,
+                model_limits=model_limits,
+                allow_ips=allow_ips,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[NewAPIKey] 增加远程 token 额度失败: {exc}", exc_info=True)
+            yield event.plain_result(f"远程 token 加额失败：{exc}")
+            return
+
+        self.store.update_key(
+            str(item["id"]),
+            token_name=token_name,
+            group=group,
+            amount=new_amount,
+            quota=quota,
+            quota_per_amount_unit=self.settings.quota_per_amount_unit,
+            expire_days=expire_days,
+            model_limits=model_limits,
+            allow_ips=allow_ips,
+            last_topup_amount=add_amount,
+            last_topup_at=int(time.time()),
+            updated_by=admin_qq,
+        )
+        yield event.plain_result(
+            f"已给 Key 记录加额：{item['id']}，远程 token 已同步\n"
+            f"原金额：{old_amount}\n"
+            f"增加金额：{add_amount}\n"
+            f"当前金额：{new_amount}\n"
+            f"当前原生额度：{quota}"
         )
 
     def _handle_review_list(self, qq_id: str) -> str:

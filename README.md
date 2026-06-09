@@ -19,6 +19,7 @@ https://newapi.qianye.host/
 - `/key 审核`：管理员查看待审核申请。
 - `/key 通过 <申请ID> [姓名] [分组] [金额] [过期天数]`：管理员审批并自动创建 NewAPI token。
 - `/key 生成 <QQ> <姓名> [分组] [金额] [过期天数]`：管理员主动给指定用户发放 Key。QQ 和姓名必填，其它可省略。
+- `/key 加额 <记录ID|QQ> <金额>`：管理员给已有 Key 增加额度，并同步 NewAPI 远程 token。
 - `/key 拒绝 <申请ID> 原因`：管理员拒绝申请。
 - `/key 封禁 <QQ>`、`/key 解封 <QQ>`：管理员控制用户状态。
 - `/key 检查`：管理员检查 NewAPI 管理接口配置是否可用。
@@ -30,6 +31,7 @@ https://newapi.qianye.host/
 - `/key 查看` 查看所有 active Key，`/key 查看 <QQ>` 查看指定用户。
 - `/key 删除 <记录ID>` 删除任意记录，`/key 删除 <QQ>` 删除该用户所有 active Key。
 - `/key 修改 <记录ID|QQ> [姓名] [分组] [金额] [过期天数]` 修改任意 Key，并尽量同步 NewAPI 远程 token。
+- `/key 加额 <记录ID|QQ> <金额>` 给任意 Key 追加金额额度，并同步 NewAPI 远程 token。
 - `/key 用量 <记录ID|QQ>` 查询任意记录用量。
 
 命令别名：
@@ -161,4 +163,11 @@ New-Api-User: <admin_user_id>
 ```text
 /key 修改 ab12cd34 张三 vip 1000000 30
 /key 修改 123456789 张三 30
+```
+
+给已有 Key 增加额度：
+
+```text
+/key 加额 ab12cd34 100000
+/key 加额 123456789 100000
 ```
